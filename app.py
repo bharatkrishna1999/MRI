@@ -320,6 +320,8 @@ async def whois_lookup(domain: str) -> dict:
     Returns the first successful result with source attribution.
     """
     domain = domain.replace("https://", "").replace("http://", "").split("/")[0].strip().lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
     if not domain or "." not in domain:
         return {"domain_age_years": 0, "status": "no_domain", "source": "none"}
 
@@ -514,7 +516,7 @@ def build_decision_summary(verdict: str, hard_fails: list, llm_override: bool,
                            llm_evidence: str, industry: str, cats: dict,
                            dom_age: float, sh_cnt: int, pr_below: int,
                            mca_y: int, llm_verdict: str, whois_succeeded: bool,
-                           coh_sc: int) -> str:
+                           coh_sc: int, is_corp_hq: bool = False) -> str:
     if verdict == "Suspicious" and hard_fails:
         first = hard_fails[0]
         if "Restricted MCC" in first:
@@ -550,7 +552,7 @@ def build_decision_summary(verdict: str, hard_fails: list, llm_override: bool,
 
     if verdict == "Suspicious":
         concerns = []
-        if sh_cnt > 20:
+        if sh_cnt > 20 and not is_corp_hq:
             concerns.append(
                 f"the address is shared with {sh_cnt} other registered businesses (shell company pattern)"
             )
@@ -634,7 +636,7 @@ def build_recommended_actions(verdict: str, hard_fails: list, llm_override: bool
                               industry: str, dom_age: float, sh_cnt: int,
                               pr_below: int, llm_verdict: str,
                               whois_succeeded: bool, whois_status: str,
-                              coh_sc: int) -> list:
+                              coh_sc: int, is_corp_hq: bool = False) -> list:
     if verdict == "Legitimate":
         return [
             "No reviewer action required for the verdict itself.",
@@ -683,7 +685,7 @@ def build_recommended_actions(verdict: str, hard_fails: list, llm_override: bool
 
     actions = []
 
-    if sh_cnt > 20:
+    if sh_cnt > 20 and not is_corp_hq:
         actions.append(
             "Verify the address against the registry of known co-working spaces (WeWork, Awfis, "
             "91springboard, Smartworks). If it's whitelisted, override the score and proceed."
@@ -894,15 +896,34 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
         ind_sc, ind_band = 10, "Industry declared does not match website content."
         ind_explain = f"Strong evidence that the merchant's declared industry doesn't match what their website actually sells (confidence {c:.2f}). Classic fraud pattern: legitimate-sounding business name hiding restricted activity."
 
-    # Coherence
-    coh_sc = _h(s+"coh", 35, 88)
-    coh_band = f"Website coherence score: {coh_sc}/100."
-    coh_explain = (
-        "How well-structured and meaningful the website content is. "
-        + ("High coherence: real business with substantial content." if coh_sc >= 70
-           else "Moderate coherence: thin content but plausible." if coh_sc >= 50
-           else "Low coherence: placeholder text, generic templates, or AI-generated filler.")
-    )
+    # Coherence — floor the hash-based estimate when we have real signals of substantive content
+    coh_raw = _h(s+"coh", 35, 88)
+    lob_len = len(req.line_of_business or "")
+    if req.wikidata_qid:
+        coh_sc = max(coh_raw, 78)
+        coh_band = f"Website coherence score: {coh_sc}/100. Verified entity (Wikidata)."
+        coh_explain = (
+            "Coherence reflects how meaningful and well-structured the website content is. "
+            "Because this entity has a verified Wikidata profile and an extracted public description, "
+            "the system trusts that the site has substantive content and floors the score at 78."
+        )
+    elif lob_len >= 200:
+        coh_sc = max(coh_raw, 65)
+        coh_band = f"Website coherence score: {coh_sc}/100."
+        coh_explain = (
+            f"Coherence measures how meaningful and structured the site content is. "
+            f"The Line of Business description is detailed ({lob_len} characters), suggesting real "
+            f"content rather than placeholder text, so the score is floored at 65."
+        )
+    else:
+        coh_sc = coh_raw
+        coh_band = f"Website coherence score: {coh_sc}/100."
+        coh_explain = (
+            "How well-structured and meaningful the website content is. "
+            + ("High coherence: real business with substantial content." if coh_sc >= 70
+               else "Moderate coherence: thin content but plausible." if coh_sc >= 50
+               else "Low coherence: placeholder text, generic templates, or AI-generated filler.")
+        )
 
     # AI Confidence
     aic_sc = int(c * 100)
@@ -950,9 +971,19 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
         mp_lbl, mp_band = "None", "No Maps listing found."
         mp_explain = "No Google Maps listing found for this address. For retail or services this is unusual. Less concerning for SaaS or B2B-only businesses."
 
-    # Shared Address
+    # Shared Address — corporate HQs legitimately host many subsidiary entities
     sh_cnt = _h(s+"sh", 1, 55)
-    if sh_cnt > 50:
+    is_corp_hq = bool(req.wikidata_qid) and mca_y >= 10
+    if is_corp_hq and sh_cnt > 5:
+        sh_sc, sh_band = 85, f"{sh_cnt} other entities at this address (corporate HQ)."
+        sh_explain = (
+            f"{sh_cnt} other registered entities share this address, but the merchant has a verified "
+            f"Wikidata corporate profile and {mca_y} years of MCA registration. Conglomerates and "
+            f"long-established groups legitimately register subsidiaries and group companies at the "
+            f"same HQ, so this clustering is interpreted as group-entity overlap rather than a shell-"
+            f"company pattern."
+        )
+    elif sh_cnt > 50:
         sh_sc, sh_band = 15, f"{sh_cnt} other businesses share this address."
         sh_explain = f"{sh_cnt} other registered entities are at the same address. This is the strongest shell-company indicator unless the address is a known co-working space."
     elif sh_cnt > 20:
@@ -1036,7 +1067,7 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
         reasons += hard_fails[:2]
     if v == "mismatch":
         reasons.append(f"Industry mismatch: {llm['evidence']}")
-    if sh_cnt > 20:
+    if sh_cnt > 20 and not is_corp_hq:
         reasons.append(f"Address shared with {sh_cnt} other registered entities")
     if pr_below > 45:
         reasons.append(f"Pricing {pr_below}% below market benchmark (fraud-lure pattern)")
@@ -1052,28 +1083,28 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
 
     signals = {
         "Identity": [
-            {"label": "GST Status", "raw": f"Active, filed {gst_m}mo ago", "score": gst, "quality": "High", "band": gst_band},
-            {"label": "MCA Status", "raw": f"Active, {mca_y} years", "score": mca, "quality": "High", "band": mca_band},
-            {"label": "Director DIN", "raw": "Clean", "score": dir_sc, "quality": "High", "band": dir_band},
+            {"label": "GST Status", "raw": f"Active, filed {gst_m}mo ago", "score": gst, "quality": "High", "band": gst_band, "explain": gst_explain},
+            {"label": "MCA Status", "raw": f"Active, {mca_y} years", "score": mca, "quality": "High", "band": mca_band, "explain": mca_explain},
+            {"label": "Director DIN", "raw": "Clean", "score": dir_sc, "quality": "High", "band": dir_band, "explain": dir_explain},
         ],
         "Domain": [
-            {"label": "Domain Age", "raw": f"{dom_age} years" + (f" (reg {whois.get('registered','')})" if whois.get('registered') else ""), "score": dom_sc, "quality": "High", "band": dom_band},
-            {"label": "SSL Certificate", "raw": "Valid", "score": ssl_sc, "quality": "Medium", "band": ssl_band},
-            {"label": "Name Match", "raw": f"{nm_sc}% similarity", "score": nm_sc, "quality": "Medium", "band": nm_band},
+            {"label": "Domain Age", "raw": f"{dom_age} years" + (f" (reg {whois.get('registered','')})" if whois.get('registered') else ""), "score": dom_sc, "quality": "High", "band": dom_band, "explain": dom_explain},
+            {"label": "SSL Certificate", "raw": "Valid", "score": ssl_sc, "quality": "Medium", "band": ssl_band, "explain": ssl_explain},
+            {"label": "Name Match", "raw": f"{nm_sc}% similarity", "score": nm_sc, "quality": "Medium", "band": nm_band, "explain": nm_explain},
         ],
         "Content": [
-            {"label": "Industry Match", "raw": "Mismatch detected" if v == "mismatch" else v.capitalize(), "score": ind_sc, "quality": "High", "band": ind_band},
-            {"label": "Coherence", "raw": f"{coh_sc}/100", "score": coh_sc, "quality": "Medium", "band": coh_band},
-            {"label": "AI Confidence", "raw": f"{c:.2f}", "score": aic_sc, "quality": "High", "band": aic_band},
+            {"label": "Industry Match", "raw": "Mismatch detected" if v == "mismatch" else v.capitalize(), "score": ind_sc, "quality": "High", "band": ind_band, "explain": ind_explain},
+            {"label": "Coherence", "raw": f"{coh_sc}/100", "score": coh_sc, "quality": "Medium", "band": coh_band, "explain": coh_explain},
+            {"label": "AI Confidence", "raw": f"{c:.2f}", "score": aic_sc, "quality": "High", "band": aic_band, "explain": aic_explain},
         ],
         "Address": [
-            {"label": "Geocode Match", "raw": f"{geo_conf:.2f} ({geo.get('status','?')})", "score": geo_sc, "quality": "High", "band": geo_band},
-            {"label": "Maps Listing", "raw": mp_lbl, "score": mp_sc, "quality": "Medium", "band": mp_band},
-            {"label": "Shared Address", "raw": f"{sh_cnt} entities", "score": sh_sc, "quality": "High", "band": sh_band},
+            {"label": "Geocode Match", "raw": f"{geo_conf:.2f} ({geo.get('status','?')})", "score": geo_sc, "quality": "High", "band": geo_band, "explain": geo_explain},
+            {"label": "Maps Listing", "raw": mp_lbl, "score": mp_sc, "quality": "Medium", "band": mp_band, "explain": mp_explain},
+            {"label": "Shared Address", "raw": f"{sh_cnt} entities", "score": sh_sc, "quality": "High", "band": sh_band, "explain": sh_explain},
         ],
         "Footprint": [
-            {"label": "SERP Results", "raw": f"{sr_sc * 3} results", "score": sr_sc, "quality": "Medium", "band": sr_band},
-            {"label": "Social Presence", "raw": "Active" if soc_sc > 55 else "Weak", "score": soc_sc, "quality": "Noisy", "band": soc_band},
+            {"label": "SERP Results", "raw": f"{sr_sc * 3} results", "score": sr_sc, "quality": "Medium", "band": sr_band, "explain": sr_explain},
+            {"label": "Social Presence", "raw": "Active" if soc_sc > 55 else "Weak", "score": soc_sc, "quality": "Noisy", "band": soc_band, "explain": soc_explain},
         ],
     }
 
@@ -1090,12 +1121,12 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
 
     # Add Contact and Behavior signals to the signals dict for full breakdown
     signals["Contact"] = [
-        {"label": "Phone Validity", "raw": f"Score {ph_sc}", "score": ph_sc, "quality": "Medium", "band": ph_band},
-        {"label": "Email Domain", "raw": "Custom" if em_sc == 80 else "Free provider", "score": em_sc, "quality": "Medium", "band": em_band},
+        {"label": "Phone Validity", "raw": f"Score {ph_sc}", "score": ph_sc, "quality": "Medium", "band": ph_band, "explain": ph_explain},
+        {"label": "Email Domain", "raw": "Custom" if em_sc == 80 else "Free provider", "score": em_sc, "quality": "Medium", "band": em_band, "explain": em_explain},
     ]
     signals["Behavior"] = [
-        {"label": "Pricing Anomaly", "raw": f"{pr_below}% below benchmark" if pr_below > 20 else "Within benchmark", "score": pr_sc, "quality": "Medium", "band": pr_band},
-        {"label": "Urgency Tactics", "raw": "None" if urg_sc > 70 else "Detected", "score": urg_sc, "quality": "Medium", "band": urg_band},
+        {"label": "Pricing Anomaly", "raw": f"{pr_below}% below benchmark" if pr_below > 20 else "Within benchmark", "score": pr_sc, "quality": "Medium", "band": pr_band, "explain": pr_explain},
+        {"label": "Urgency Tactics", "raw": "None" if urg_sc > 70 else "Detected", "score": urg_sc, "quality": "Medium", "band": urg_band, "explain": urg_explain},
     ]
 
     decision_summary = build_decision_summary(
@@ -1103,13 +1134,24 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
         llm_evidence=llm["evidence"], industry=req.industry, cats=cats,
         dom_age=dom_age, sh_cnt=sh_cnt, pr_below=pr_below, mca_y=mca_y,
         llm_verdict=v, whois_succeeded=whois_succeeded, coh_sc=coh_sc,
+        is_corp_hq=is_corp_hq,
     )
     recommended_actions = build_recommended_actions(
         verdict=verdict, hard_fails=hard_fails, llm_override=llm_override,
         industry=req.industry, dom_age=dom_age, sh_cnt=sh_cnt, pr_below=pr_below,
         llm_verdict=v, whois_succeeded=whois_succeeded, whois_status=whois_status,
-        coh_sc=coh_sc,
+        coh_sc=coh_sc, is_corp_hq=is_corp_hq,
     )
+
+    cat_descriptions = {
+        "Identity":  "Government and corporate registry records that confirm the entity legally exists. Active GST returns, MCA registration history, and clean director records anchor the merchant's legitimacy.",
+        "Domain":    "Properties of the website domain itself: how long it has been registered, whether it serves a valid SSL certificate, and how closely the domain name matches the legal entity name.",
+        "Content":   "What the website actually says it sells, and how well that aligns with the declared industry. Driven by content extraction and a rule-based industry matcher.",
+        "Contact":   "Reachability of the merchant by phone and email. Custom email domains and reachable landlines score higher than free-provider emails and unreachable numbers.",
+        "Address":   "Physical address verification: whether it geocodes to real coordinates, has a Google Maps presence, and isn't shared with an unusual number of other registered entities.",
+        "Footprint": "Public visibility: search-engine results that mention the business and the maturity of its social media presence. Established businesses leave digital trails.",
+        "Behavior":  "Storefront behavior signals: how the merchant's pricing compares to market benchmarks, and whether the website uses high-pressure urgency tactics.",
+    }
 
     return {
         "verdict": verdict, "confidence": conf, "final_score": final,
@@ -1117,6 +1159,7 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
         "llm_note": llm["evidence"] if llm_override else "",
         "cats": cats, "cat_weights": weights, "signals": signals,
         "sub_weights": sub_weights,
+        "cat_descriptions": cat_descriptions,
         "reasons": reasons[:3],
         "decision_summary": decision_summary,
         "recommended_actions": recommended_actions,
@@ -1274,6 +1317,14 @@ h2 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
 .bd-band-row { background: #f8fafc; }
 .bd-band-row td { padding: 4px 8px 12px 56px; font-size: 11px; color: #6b7280; font-style: italic; border-bottom: 1px solid #f1f3f6; }
 .bd-band-row .band-text { background: #eff6ff; padding: 6px 10px; border-radius: 4px; border-left: 3px solid #2563eb; font-style: normal; color: #1e40af; display: inline-block; }
+.bd-cat-desc-row { background: #f8fafc; }
+.bd-cat-desc-row td { padding: 8px 8px 14px 24px; border-bottom: 1px solid #f1f3f6; }
+.cat-desc { background: #f1f5f9; padding: 10px 14px; border-radius: 5px; border-left: 3px solid #64748b; font-size: 12px; line-height: 1.6; color: #334155; }
+.cat-desc b { color: #0f172a; }
+.bd-explain-row { background: #f8fafc; }
+.bd-explain-row td { padding: 0 8px 12px 56px; border-bottom: 1px solid #f1f3f6; }
+.explain-text { font-size: 11px; line-height: 1.6; color: #4b5563; padding: 6px 10px; background: #ffffff; border-radius: 4px; border: 1px solid #e5e7eb; }
+.explain-text b { color: #1a1f36; }
 .bd-sub-rows { display: none; }
 .bd-sub-rows.show { display: table-row-group; }
 .viz-bar-wrap { background: #eef0f3; height: 6px; border-radius: 3px; overflow: hidden; }
@@ -1774,7 +1825,15 @@ function showDetail(m) {
       <td class="visual-cell"><div class="viz-bar-wrap"><div class="viz-bar" style="width:${sub}%; background:${color}"></div></div></td>
     </tr>`;
 
-    // Sub-signal rows with band explanation
+    // Category description (visible when expanded)
+    const catDesc = (m.cat_descriptions || {})[k];
+    if (catDesc) {
+      bd += `<tr class="bd-cat-desc-row sub-${k}" style="display:none">
+        <td colspan="5"><div class="cat-desc"><b>What this category measures:</b> ${escapeHtml(catDesc)}</div></td>
+      </tr>`;
+    }
+
+    // Sub-signal rows with band and explanation
     for (const sg of sigs) {
       const sw = subWeights[sg.label] || 0;
       const subContrib = (sg.score * sw).toFixed(2);
@@ -1790,6 +1849,11 @@ function showDetail(m) {
       if (sg.band) {
         bd += `<tr class="bd-band-row sub-${k}" style="display:none">
           <td colspan="5"><span class="band-text">Band: ${escapeHtml(sg.band)}</span></td>
+        </tr>`;
+      }
+      if (sg.explain) {
+        bd += `<tr class="bd-explain-row sub-${k}" style="display:none">
+          <td colspan="5"><div class="explain-text"><b>What this measures:</b> ${escapeHtml(sg.explain)}</div></td>
         </tr>`;
       }
     }
