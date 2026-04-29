@@ -1246,10 +1246,10 @@ h2 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
 .reasons-title { text-align: left; font-size: 13px; font-weight: 600; margin-top: 18px; margin-bottom: 8px; }
 .reasons-list { text-align: left; padding-left: 18px; font-size: 12px; line-height: 1.7; }
 
-.reviewer-card { background: #fff; border-radius: 8px; padding: 22px 24px; margin-top: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
-.reviewer-card h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
-.decision-summary { font-size: 13px; line-height: 1.7; color: #1a1f36; }
-.recommended-actions { padding-left: 22px; font-size: 13px; line-height: 1.7; color: #1a1f36; }
+.reviewer-section { text-align: left; margin-top: 22px; padding-top: 18px; border-top: 1px solid #eef0f3; }
+.reviewer-section h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #1a1f36; }
+.decision-summary { font-size: 12px; line-height: 1.6; color: #1a1f36; }
+.recommended-actions { padding-left: 20px; font-size: 12px; line-height: 1.6; color: #1a1f36; margin: 0; }
 .recommended-actions li { margin-bottom: 8px; }
 
 .badge { padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
@@ -1432,17 +1432,17 @@ h2 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
       <button class="verdict-btn" id="verdict-badge">-</button>
       <div class="conf-label">Confidence</div>
       <div class="conf-value" id="conf-value">-</div>
+
+      <div class="reviewer-section">
+        <h3>Decision Summary</h3>
+        <p id="decision-summary-text" class="decision-summary"></p>
+      </div>
+
+      <div class="reviewer-section">
+        <h3>Recommended Reviewer Action</h3>
+        <ol id="recommended-actions-list" class="recommended-actions"></ol>
+      </div>
     </div>
-  </div>
-
-  <div class="reviewer-card">
-    <h2>Decision Summary</h2>
-    <p id="decision-summary-text" class="decision-summary"></p>
-  </div>
-
-  <div class="reviewer-card">
-    <h2>Recommended Reviewer Action</h2>
-    <ol id="recommended-actions-list" class="recommended-actions"></ol>
   </div>
 
   <div class="breakdown-card">
