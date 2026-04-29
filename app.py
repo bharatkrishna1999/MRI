@@ -510,6 +510,270 @@ def _h(seed: str, lo: int, hi: int) -> int:
     return lo + int(hashlib.md5(seed.encode()).hexdigest()[:4], 16) % max(1, hi - lo + 1)
 
 
+def build_decision_summary(verdict: str, hard_fails: list, llm_override: bool,
+                           llm_evidence: str, industry: str, cats: dict,
+                           dom_age: float, sh_cnt: int, pr_below: int,
+                           mca_y: int, llm_verdict: str, whois_succeeded: bool,
+                           coh_sc: int) -> str:
+    if verdict == "Suspicious" and hard_fails:
+        first = hard_fails[0]
+        if "Restricted MCC" in first:
+            return (
+                f"This merchant declared {industry} as their industry, which is on the restricted MCC "
+                f"list and requires explicit aggregator whitelist approval. The system has rejected the "
+                f"application without scoring further signals."
+            )
+        if "Domain registered under" in first:
+            return (
+                "The website domain was registered less than 30 days ago. A brand-new domain with no "
+                "operational history is a hard fail because the entity has no track record to evaluate. "
+                "The system has rejected the application without scoring further signals."
+            )
+        if "Address geocode" in first:
+            return (
+                "The merchant's address could not be resolved to real coordinates with sufficient "
+                "confidence. An address that fails geocoding suggests either a malformed or fictitious "
+                "address. The system has rejected the application without scoring further signals."
+            )
+        return (
+            f"A hard fail rule triggered ({first}). The system has rejected the application without "
+            f"scoring further signals."
+        )
+
+    if verdict == "Suspicious" and llm_override:
+        return (
+            f"The merchant declared they operate in {industry}, but content analysis indicates a "
+            f"different business: {llm_evidence}. This kind of mismatch between declared business and "
+            f"actual offering is a known fraud pattern where legitimate-sounding business names hide "
+            f"restricted activity."
+        )
+
+    if verdict == "Suspicious":
+        concerns = []
+        if sh_cnt > 20:
+            concerns.append(
+                f"the address is shared with {sh_cnt} other registered businesses (shell company pattern)"
+            )
+        if pr_below > 45:
+            concerns.append(
+                f"pricing is {pr_below}% below market benchmark (fraud-lure pattern)"
+            )
+        if llm_verdict == "mismatch":
+            concerns.append("the website content does not align with the declared industry")
+        if whois_succeeded and 0 < dom_age < 1:
+            concerns.append(
+                f"the domain was registered only {int(dom_age * 12)} months ago"
+            )
+        if coh_sc < 50:
+            concerns.append(
+                f"the website coherence score is {coh_sc}/100, suggesting placeholder or thin content"
+            )
+        if len(concerns) >= 2:
+            return (
+                f"{len(concerns)} independent risk indicators all scored poorly: "
+                + "; ".join(concerns[:3])
+                + ". Any one of these alone might be explainable, but together they paint a consistent "
+                  "picture of fraud risk."
+            )
+        sorted_cats = sorted(cats.items(), key=lambda x: x[1])
+        worst = [k for k, _ in sorted_cats[:2]]
+        if not concerns:
+            concerns.append(
+                f"the {worst[0]} and {worst[1]} categories both scored in the failing band"
+            )
+        return (
+            "The overall score landed in the Suspicious band: "
+            + "; ".join(concerns)
+            + ". The system has rejected the application."
+        )
+
+    if verdict == "Needs Review":
+        sorted_high = sorted(cats.items(), key=lambda x: -x[1])
+        sorted_low = sorted(cats.items(), key=lambda x: x[1])
+        strong = [k for k, val in sorted_high if val >= 75][:3]
+        weak = [k for k, val in sorted_low if val < 60][:3]
+        if strong and weak:
+            return (
+                f"The merchant has strong signals in {', '.join(strong)} but weak signals in "
+                f"{', '.join(weak)}. Neither side dominates, so the system cannot make a confident "
+                f"automated decision and is escalating to human judgment."
+            )
+        if weak:
+            return (
+                f"No category scored strongly enough to drive an approval, and {', '.join(weak)} "
+                f"scored below the comfort threshold. The score is in the middle band, so the system "
+                f"cannot make a confident automated decision and is escalating to human judgment."
+            )
+        if strong:
+            return (
+                f"The merchant scored well in {', '.join(strong)}, but the remaining categories sit in "
+                f"the middle band rather than clearing the approval threshold. The system cannot make "
+                f"a confident automated decision and is escalating to human judgment."
+            )
+        return (
+            "All categories scored in the middle band with no category strong enough to drive approval "
+            "or weak enough to drive rejection. The system cannot make a confident automated decision "
+            "and is escalating to human judgment."
+        )
+
+    # Legitimate
+    sorted_cats = sorted(cats.items(), key=lambda x: -x[1])
+    top = [k for k, val in sorted_cats if val >= 75][:3]
+    top_text = ", ".join(top) if top else "all measured"
+    pieces = [f"All high-weight categories scored strongly ({top_text})"]
+    if mca_y >= 5:
+        pieces.append(f"the company has been registered for {mca_y} years")
+    if whois_succeeded and dom_age >= 5:
+        pieces.append(f"the website domain has been registered for {int(dom_age)} years")
+    if llm_verdict == "match":
+        pieces.append("the website content matches the declared industry")
+    return "; ".join(pieces[:3]) + ". No red flags detected."
+
+
+def build_recommended_actions(verdict: str, hard_fails: list, llm_override: bool,
+                              industry: str, dom_age: float, sh_cnt: int,
+                              pr_below: int, llm_verdict: str,
+                              whois_succeeded: bool, whois_status: str,
+                              coh_sc: int) -> list:
+    if verdict == "Legitimate":
+        return [
+            "No reviewer action required for the verdict itself.",
+            "Confirm the auto-approval has propagated to the aggregator's onboarding system.",
+            "Set the merchant for routine post-approval transaction monitoring per standard SLA.",
+        ]
+
+    if any("Restricted MCC" in hf for hf in hard_fails):
+        return [
+            f"Confirm with the aggregator's compliance team whether {industry} is on the current "
+            f"restricted MCC list and whether this merchant has any whitelist approval on file.",
+            "If a whitelist exemption exists, attach the approval document to the application and "
+            "re-run evaluation.",
+            "If no exemption exists, reject the application and notify the merchant in writing of the "
+            "restricted MCC policy.",
+        ]
+
+    if any("Address geocode" in hf for hf in hard_fails):
+        return [
+            "Verify the address spelling and pincode against the merchant's registration documents "
+            "(GST or MCA filings).",
+            "If the address has a typo, ask the onboarding team to correct it and re-run evaluation.",
+            "If the address is correctly entered but still fails geocoding, request a utility bill or "
+            "rental receipt at the address before proceeding.",
+        ]
+
+    if any("Domain registered under" in hf for hf in hard_fails):
+        return [
+            "Ask the merchant to provide their GST registration certificate showing operations history "
+            "that pre-dates the domain.",
+            "Check whether the merchant has an older domain that was rebranded. If yes, accept and "
+            "document the override.",
+            "If the merchant cannot prove pre-domain operational history, reject the application as a "
+            "brand-new entity with no track record.",
+        ]
+
+    if llm_override or llm_verdict == "mismatch":
+        return [
+            "Open the merchant's website and confirm what they actually sell. Compare against their "
+            "declared industry on the application form.",
+            "If the declared industry was a clerical error, ask the onboarding team to correct the "
+            "application and re-run evaluation.",
+            "If the website genuinely offers a different business than declared, escalate to the Risk "
+            "Head and reject the application.",
+        ]
+
+    actions = []
+
+    if sh_cnt > 20:
+        actions.append(
+            "Verify the address against the registry of known co-working spaces (WeWork, Awfis, "
+            "91springboard, Smartworks). If it's whitelisted, override the score and proceed."
+        )
+        actions.append(
+            "If not a co-working space, request the merchant's office lease agreement or rental "
+            "receipt as proof of dedicated occupancy."
+        )
+        actions.append(
+            f"Check the other {max(0, sh_cnt - 1)} entities at this address for any pattern of fraud "
+            f"history before deciding."
+        )
+
+    if pr_below > 45 and len(actions) < 5:
+        actions.append(
+            "Open the merchant's website and confirm the prices listed are the actual sale prices, "
+            "not pre-discount MRP."
+        )
+        actions.append(
+            "Ask the merchant to explain the cost advantage. Legitimate explanations: clearance sale, "
+            "factory-direct, refurbished goods, regional pricing. Suspicious explanations: vague "
+            "claims, no inventory model."
+        )
+        actions.append(
+            "Sample 3-5 products and check competitor prices. If the gap holds across products, treat "
+            "as a fraud-lure pattern and reject."
+        )
+
+    if not whois_succeeded and len(actions) < 5:
+        actions.append(
+            f"The system could not fetch the domain registration date from external WHOIS services "
+            f"({whois_status or 'unknown error'}). This is an upstream failure, not a merchant problem."
+        )
+        actions.append(
+            "Manually check the domain registration date using whois.com or who.is and enter the date "
+            "in the override notes."
+        )
+        actions.append(
+            "Re-run the evaluation after entering the date, or proceed based on the other signals if "
+            "they are conclusive."
+        )
+    elif whois_succeeded and 0 < dom_age < 2 and len(actions) < 5:
+        actions.append(
+            "Ask the merchant to provide their GST registration certificate showing operations history "
+            "that pre-dates the domain."
+        )
+        actions.append(
+            "Check whether the merchant has an older domain that was rebranded. If yes, accept and "
+            "document the override."
+        )
+        actions.append(
+            "If the merchant cannot prove pre-domain operational history, treat the new domain as a "
+            "risk signal and request a deposit or transaction limit cap before approval."
+        )
+
+    if coh_sc < 50 and len(actions) < 5:
+        actions.append(
+            "Visit the merchant's website and confirm whether the content is real or placeholder. "
+            "Ask the merchant whether the site is still under development and request a launch date "
+            "commitment."
+        )
+
+    if verdict == "Needs Review" and not actions:
+        return [
+            "Identify which weak signal is easiest to verify with one additional document or data "
+            "point. Request that artifact from the merchant.",
+            "If the weak signal is a website coherence issue, ask the merchant whether their website "
+            "is still under development and request a launch date commitment.",
+            "If signals stay mixed after one round of verification, escalate to the Risk Head with all "
+            "collected evidence.",
+        ]
+
+    if verdict == "Needs Review" and len(actions) < 5:
+        actions.append(
+            "If signals stay mixed after one round of verification, escalate to the Risk Head with all "
+            "collected evidence."
+        )
+
+    if not actions:
+        return [
+            "Document the specific signals that drove the Suspicious verdict in the rejection note.",
+            "Notify the merchant in writing with a generic risk-policy reason. Do not disclose "
+            "specific scoring categories.",
+            "If the merchant contests the rejection, escalate to the Risk Head with the full scoring "
+            "breakdown attached.",
+        ]
+
+    return actions[:5]
+
+
 def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) -> dict:
     s = req.legal_name + req.website
     dom_age = whois.get("domain_age_years", 0)
@@ -834,6 +1098,19 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
         {"label": "Urgency Tactics", "raw": "None" if urg_sc > 70 else "Detected", "score": urg_sc, "quality": "Medium", "band": urg_band},
     ]
 
+    decision_summary = build_decision_summary(
+        verdict=verdict, hard_fails=hard_fails, llm_override=llm_override,
+        llm_evidence=llm["evidence"], industry=req.industry, cats=cats,
+        dom_age=dom_age, sh_cnt=sh_cnt, pr_below=pr_below, mca_y=mca_y,
+        llm_verdict=v, whois_succeeded=whois_succeeded, coh_sc=coh_sc,
+    )
+    recommended_actions = build_recommended_actions(
+        verdict=verdict, hard_fails=hard_fails, llm_override=llm_override,
+        industry=req.industry, dom_age=dom_age, sh_cnt=sh_cnt, pr_below=pr_below,
+        llm_verdict=v, whois_succeeded=whois_succeeded, whois_status=whois_status,
+        coh_sc=coh_sc,
+    )
+
     return {
         "verdict": verdict, "confidence": conf, "final_score": final,
         "hard_fails": hard_fails, "llm_override": llm_override,
@@ -841,6 +1118,8 @@ def compute_full_score(req: MerchantRequest, whois: dict, geo: dict, llm: dict) 
         "cats": cats, "cat_weights": weights, "signals": signals,
         "sub_weights": sub_weights,
         "reasons": reasons[:3],
+        "decision_summary": decision_summary,
+        "recommended_actions": recommended_actions,
         "enrichment": {
             "whois": whois,
             "geocode": geo,
@@ -966,6 +1245,12 @@ h2 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
 .conf-value { font-size: 38px; font-weight: 700; margin-top: 2px; }
 .reasons-title { text-align: left; font-size: 13px; font-weight: 600; margin-top: 18px; margin-bottom: 8px; }
 .reasons-list { text-align: left; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+
+.reviewer-card { background: #fff; border-radius: 8px; padding: 22px 24px; margin-top: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+.reviewer-card h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+.decision-summary { font-size: 13px; line-height: 1.7; color: #1a1f36; }
+.recommended-actions { padding-left: 22px; font-size: 13px; line-height: 1.7; color: #1a1f36; }
+.recommended-actions li { margin-bottom: 8px; }
 
 .badge { padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
 .badge.suspicious { background: #fee2e2; color: #b91c1c; }
@@ -1147,9 +1432,17 @@ h2 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
       <button class="verdict-btn" id="verdict-badge">-</button>
       <div class="conf-label">Confidence</div>
       <div class="conf-value" id="conf-value">-</div>
-      <div class="reasons-title">Top Reasons</div>
-      <ol class="reasons-list" id="reasons-list"></ol>
     </div>
+  </div>
+
+  <div class="reviewer-card">
+    <h2>Decision Summary</h2>
+    <p id="decision-summary-text" class="decision-summary"></p>
+  </div>
+
+  <div class="reviewer-card">
+    <h2>Recommended Reviewer Action</h2>
+    <ol id="recommended-actions-list" class="recommended-actions"></ol>
   </div>
 
   <div class="breakdown-card">
@@ -1454,7 +1747,12 @@ function showDetail(m) {
   badge.className = "verdict-btn " + vc;
   badge.innerHTML = badgeIcon(m.verdict) + " " + m.verdict;
   document.getElementById("conf-value").textContent = Math.round(m.confidence * 100) + "%";
-  document.getElementById("reasons-list").innerHTML = m.reasons.map(r => `<li>${escapeHtml(r)}</li>`).join("");
+
+  // Decision Summary and Recommended Reviewer Action
+  document.getElementById("decision-summary-text").textContent = m.decision_summary || "";
+  const actions = m.recommended_actions || [];
+  document.getElementById("recommended-actions-list").innerHTML =
+    actions.map(a => `<li>${escapeHtml(a)}</li>`).join("");
 
   // Breakdown
   const order = ["Identity","Domain","Content","Contact","Address","Footprint","Behavior"];
