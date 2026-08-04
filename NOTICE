@@ -1,0 +1,20 @@
+Third-party data bundled in this repository
+===========================================
+
+data/GeoLite2-Country.mmdb
+--------------------------
+This product includes GeoLite2 data created by MaxMind, available from
+https://www.maxmind.com.
+
+The GeoLite2 Country database is redistributed here so the application can
+resolve a hosting country locally, with no API key, no rate limit and no
+outbound call to a geolocation service. It is read through the `geoip2` Python
+library in mri/geo.py.
+
+Use of the GeoLite2 database is subject to MaxMind's GeoLite2 End User License
+Agreement: https://www.maxmind.com/en/geolite2/eula
+
+To refresh the file, download a current GeoLite2-Country.mmdb from MaxMind
+(a free account is required for direct downloads) and replace data/GeoLite2-Country.mmdb.
+The application reads whatever build date is in the file and reports it at
+/api/v1/health.

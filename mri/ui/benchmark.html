@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmark — Merchant Risk Intelligence</title>
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#fff;--ink:#0b1220;--muted:#5b6577;--line:#e4e8ee;
+  --brand:#1f5eff;--good:#0f9d58;--bad:#d92d20;--warn:#e8a317;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+     background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+a{color:var(--brand);text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+header{background:#0b1220;color:#fff;padding:14px 0}
+header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:-.2px}
+.brand span{opacity:.55;font-weight:400}
+.hnav{display:flex;align-items:center;gap:18px;font-size:13px}
+.hnav a{color:#c8d2e4}
+.chip{font-family:var(--mono);font-size:11px;background:#1b2740;color:#8fb0ff;
+  padding:4px 9px;border-radius:5px;border:1px solid #2a3a5c}
+
+.hero{padding:32px 0 18px}
+h1{font-size:28px;letter-spacing:-.6px;margin-bottom:6px}
+.sub{color:var(--muted);max-width:760px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
+.card h3{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:14px}
+
+.headline{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:16px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px}
+.stat b{display:block;font-size:38px;letter-spacing:-1.4px;line-height:1.05}
+.stat span{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted)}
+.stat small{display:block;font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.45}
+.stat.p b{color:var(--brand)} .stat.r b{color:var(--good)} .stat.f b{color:#7c5cff} .stat.x b{color:var(--bad)}
+
+.sliderrow{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+input[type=range]{flex:1;min-width:260px;accent-color:var(--brand)}
+.thval{font-family:var(--mono);font-size:26px;font-weight:700;min-width:56px;text-align:right}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+
+table.cm{border-collapse:collapse;width:100%;font-size:13px;max-width:520px}
+table.cm td,table.cm th{border:1px solid var(--line);padding:12px;text-align:center}
+table.cm th{background:#fafbfd;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+table.cm td b{font-size:26px;display:block;line-height:1.15}
+td.tp{background:#eef7f1}td.tp b{color:var(--good)}
+td.tn{background:#eef7f1}td.tn b{color:var(--good)}
+td.fp{background:#fdf1f0}td.fp b{color:var(--bad)}
+td.fn{background:#fdf1f0}td.fn b{color:var(--bad)}
+td.lab{background:#fafbfd;font-weight:600;font-size:12px;text-align:right}
+
+svg{width:100%;height:auto;display:block}
+.legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:10px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+
+table.rows{width:100%;border-collapse:collapse;font-size:12.5px}
+table.rows th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);
+  padding:0 8px 8px;border-bottom:1px solid var(--line)}
+table.rows td{padding:7px 8px;border-bottom:1px solid #f1f3f7}
+table.rows td.n{text-align:right;font-family:var(--mono)}
+.pill{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:4px}
+.pill.good{background:#eef7f1;color:#0b7a44}.pill.bad{background:#fdf1f0;color:#a51b10}
+.pill.hit{background:#eef7f1;color:#0b7a44}.pill.miss{background:#fdf1f0;color:#a51b10}
+.code{font-family:var(--mono);font-size:10px;background:#f1f4fb;color:#31456e;padding:1px 5px;
+  border-radius:3px;margin-right:3px}
+.empty{text-align:center;padding:50px 20px;color:var(--muted)}
+button.run{font:inherit;font-weight:600;background:var(--brand);color:#fff;border:0;border-radius:8px;
+  padding:11px 22px;cursor:pointer}
+button.run:disabled{background:#9db4e8;cursor:progress}
+.note{font-size:12px;color:var(--muted);line-height:1.6;margin-top:12px}
+footer{border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+
+<header><div class="wrap">
+  <div class="brand">Merchant Risk Intelligence <span>· benchmark</span></div>
+  <nav class="hnav"><a href="/">Underwrite</a><a href="/docs">API docs</a>
+  <span class="chip" id="policyChip">policy_v1.0</span></nav>
+</div></header>
+
+<div class="wrap hero">
+  <h1>How well does this policy actually separate good from bad?</h1>
+  <p class="sub">60 hand-labelled domains: 30 legitimate digital merchants pulled from Product Hunt and Indie
+  Hackers, 30 that should not board — restricted verticals, defunct company shells, parked domains. The engine
+  runs over all 60 and the numbers below are what came back. <b>Positive class is "bad"</b>: precision is how
+  often a decline was correct, recall is how much of the bad set was caught, and false positive rate is how many
+  good merchants were turned away.</p>
+</div>
+
+<div class="wrap" id="app"><div class="empty" id="loading">Loading benchmark…</div></div>
+
+<footer><div class="wrap" id="foot"></div></footer>
+
+<script>
+const $ = id=>document.getElementById(id);
+let DATA=null, TH=60;
+
+fetch("/api/v1/policy").then(r=>r.json()).then(p=>{$("policyChip").textContent=p.policy_version;});
+
+fetch("/api/v1/benchmark/results")
+  .then(async r=>{ if(r.status===404){ const j=await r.json(); throw {noRun:true, ...j}; } return r.json(); })
+  .then(d=>{ DATA=d; TH=d.default_threshold||60; renderAll(); })
+  .catch(e=>{ e.noRun ? renderEmpty(e) : renderError(e); });
+
+function renderEmpty(info){
+  $("app").innerHTML = `<div class="card"><div class="empty">
+    <h3 style="margin-bottom:12px">No benchmark run stored yet</h3>
+    <p style="margin-bottom:18px">${info.labels||60} domains are labelled and committed in
+    <code>data/benchmark_labels.csv</code>. Running the engine over all of them makes live network calls
+    and takes a few minutes.</p>
+    <button class="run" id="runbtn" onclick="startRun()">Run the benchmark now</button>
+    <p class="note">Or from a shell: <code>python -m mri.benchmark</code> — it writes
+    <code>data/benchmark_results.json</code>, which this page reads on next load.</p>
+    <p class="note" id="runstat"></p></div></div>`;
+}
+function renderError(e){
+  $("app").innerHTML = `<div class="card"><div class="empty">Could not load benchmark: ${e.message||e}</div></div>`;
+}
+
+function startRun(){
+  $("runbtn").disabled = true;
+  fetch("/api/v1/benchmark/run",{method:"POST"}).then(r=>r.json()).then(()=>poll());
+}
+function poll(){
+  fetch("/api/v1/benchmark/status").then(r=>r.json()).then(s=>{
+    $("runstat").textContent = `${s.status} — ${s.done}/${s.total} domains evaluated`;
+    if(s.status==="running"){ setTimeout(poll,1500); }
+    else if(s.status==="complete"){ location.reload(); }
+    else { $("runstat").textContent = "Run failed: " + (s.error||"unknown"); $("runbtn").disabled=false; }
+  });
+}
+
+function renderAll(){
+  $("app").innerHTML = `
+    <div class="headline" id="headline"></div>
+    <div class="card">
+      <h3>Approval threshold — recomputes everything live</h3>
+      <div class="sliderrow">
+        <input type="range" min="0" max="100" step="1" value="${TH}" id="slider"
+               oninput="TH=+this.value; paint();">
+        <div class="thval" id="thval">${TH}</div>
+      </div>
+      <p class="note">A domain scoring below the threshold is a predicted decline. Drag it and watch precision
+      trade against recall: that trade is the actual product decision, and it is worth a different number
+      depending on whether a missed fraud or a turned-away merchant costs you more.</p>
+    </div>
+    <div class="grid2">
+      <div class="card"><h3>Confusion matrix</h3><div id="cm"></div>
+        <p class="note" id="cmnote"></p></div>
+      <div class="card"><h3>Score distribution — good vs bad</h3><div id="hist"></div>
+        <div class="legend"><span><i style="background:var(--good)"></i>legitimate (30)</span>
+        <span><i style="background:var(--bad)"></i>should not board (30)</span>
+        <span><i style="background:var(--brand)"></i>threshold</span></div></div>
+    </div>
+    <div class="card"><h3>Precision / recall across every threshold</h3><div id="curve"></div></div>
+    <div class="card"><h3>Every domain in the set</h3><div id="rows"></div></div>`;
+  $("foot").innerHTML = `Run at ${DATA.run_at} under <b>${DATA.policy_version}</b> ·
+    ${DATA.scored}/${DATA.total} domains scored · took ${DATA.duration_s}s ·
+    labels from <code>${DATA.labels_file}</code>`;
+  paint();
+}
+
+function metricsAt(t){
+  if(DATA.sweep){ const hit = DATA.sweep.find(m=>m.threshold===t); if(hit) return hit; }
+  return compute(t);
+}
+function compute(t){
+  let tp=0,fp=0,tn=0,fn=0,un=0;
+  DATA.results.forEach(r=>{
+    if(r.score===null||r.score===undefined){un++;return;}
+    const pb = r.score < t, ab = r.true_label==="bad";
+    if(pb&&ab)tp++; else if(pb&&!ab)fp++; else if(!pb&&!ab)tn++; else fn++;
+  });
+  const precision=(tp+fp)?tp/(tp+fp):0, recall=(tp+fn)?tp/(tp+fn):0;
+  return {threshold:t,tp,fp,tn,fn,unscored:un,precision,recall,
+    f1:(precision+recall)?2*precision*recall/(precision+recall):0,
+    false_positive_rate:(fp+tn)?fp/(fp+tn):0,
+    accuracy:(tp+tn+fp+fn)?(tp+tn)/(tp+tn+fp+fn):0};
+}
+
+function paint(){
+  $("thval").textContent = TH;
+  const m = metricsAt(TH);
+  const pc = v => (v*100).toFixed(1)+"%";
+
+  $("headline").innerHTML = `
+    <div class="stat p"><span>Precision</span><b>${pc(m.precision)}</b>
+      <small>Of ${m.tp+m.fp} declines, ${m.tp} were genuinely bad.</small></div>
+    <div class="stat r"><span>Recall</span><b>${pc(m.recall)}</b>
+      <small>Caught ${m.tp} of the ${m.tp+m.fn} domains that should not board.</small></div>
+    <div class="stat f"><span>F1</span><b>${pc(m.f1)}</b>
+      <small>Harmonic mean of the two.</small></div>
+    <div class="stat x"><span>False positive rate</span><b>${pc(m.false_positive_rate)}</b>
+      <small>${m.fp} of ${m.fp+m.tn} good merchants turned away.</small></div>`;
+
+  $("cm").innerHTML = `<table class="cm">
+    <tr><th></th><th>Predicted decline</th><th>Predicted approve</th></tr>
+    <tr><td class="lab">Actually bad</td><td class="tp"><b>${m.tp}</b>true positive</td>
+        <td class="fn"><b>${m.fn}</b>false negative — fraud boarded</td></tr>
+    <tr><td class="lab">Actually good</td><td class="fp"><b>${m.fp}</b>false positive — revenue lost</td>
+        <td class="tn"><b>${m.tn}</b>true negative</td></tr></table>`;
+  $("cmnote").textContent = `At threshold ${TH}, accuracy is ${pc(m.accuracy)}`
+    + (m.unscored ? `. ${m.unscored} domain(s) could not be scored at all and are excluded from the matrix.` : ".");
+
+  drawHist(); drawCurve();
+}
+
+function drawHist(){
+  const h = DATA.histogram, W=520, H=240, pad={l:34,r:10,t:12,b:28};
+  const bw = (W-pad.l-pad.r)/h.bins;
+  const max = Math.max(1, ...h.good, ...h.bad);
+  const y = v => H-pad.b-(v/max)*(H-pad.t-pad.b);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Score distribution">`;
+  for(let i=0;i<=4;i++){ const v=Math.round(max*i/4);
+    s += `<line x1="${pad.l}" y1="${y(v)}" x2="${W-pad.r}" y2="${y(v)}" stroke="#eef1f6"/>
+          <text x="${pad.l-6}" y="${y(v)+4}" font-size="10" fill="#8a93a5" text-anchor="end">${v}</text>`; }
+  for(let i=0;i<h.bins;i++){
+    const x = pad.l+i*bw;
+    s += `<rect x="${x+1}" y="${y(h.good[i])}" width="${bw-2}" height="${H-pad.b-y(h.good[i])}"
+             fill="#0f9d58" opacity=".62"/>`;
+    s += `<rect x="${x+1}" y="${y(h.bad[i])}" width="${bw-2}" height="${H-pad.b-y(h.bad[i])}"
+             fill="#d92d20" opacity=".62"/>`;
+    s += `<text x="${x+bw/2}" y="${H-9}" font-size="9.5" fill="#8a93a5" text-anchor="middle">${h.edges[i]}</text>`;
+  }
+  const tx = pad.l+(TH/100)*(W-pad.l-pad.r);
+  s += `<line x1="${tx}" y1="${pad.t}" x2="${tx}" y2="${H-pad.b}" stroke="#1f5eff" stroke-width="2"
+          stroke-dasharray="4 3"/><text x="${tx+4}" y="${pad.t+11}" font-size="10" fill="#1f5eff">${TH}</text>`;
+  s += `</svg>`;
+  $("hist").innerHTML = s;
+}
+
+function drawCurve(){
+  const W=1100,H=260,pad={l:40,r:14,t:14,b:30};
+  const sweep = DATA.sweep || Array.from({length:101},(_,t)=>compute(t));
+  const x = t => pad.l+(t/100)*(W-pad.l-pad.r);
+  const y = v => H-pad.b-v*(H-pad.t-pad.b);
+  const line = (key,color) => {
+    const d = sweep.map((m,i)=>`${i?"L":"M"}${x(m.threshold).toFixed(1)},${y(m[key]).toFixed(1)}`).join("");
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>`;
+  };
+  let s = `<svg viewBox="0 0 ${W} ${H}">`;
+  for(let i=0;i<=4;i++){ const v=i/4;
+    s += `<line x1="${pad.l}" y1="${y(v)}" x2="${W-pad.r}" y2="${y(v)}" stroke="#eef1f6"/>
+          <text x="${pad.l-6}" y="${y(v)+4}" font-size="10" fill="#8a93a5" text-anchor="end">${(v*100)|0}%</text>`;}
+  for(let t=0;t<=100;t+=10){
+    s += `<text x="${x(t)}" y="${H-9}" font-size="10" fill="#8a93a5" text-anchor="middle">${t}</text>`;}
+  s += line("precision","#1f5eff") + line("recall","#0f9d58") + line("false_positive_rate","#d92d20");
+  s += `<line x1="${x(TH)}" y1="${pad.t}" x2="${x(TH)}" y2="${H-pad.b}" stroke="#0b1220" stroke-width="1.5"
+          stroke-dasharray="4 3"/>`;
+  s += `</svg>
+    <div class="legend"><span><i style="background:#1f5eff"></i>precision</span>
+    <span><i style="background:#0f9d58"></i>recall</span>
+    <span><i style="background:#d92d20"></i>false positive rate</span></div>`;
+  $("curve").innerHTML = s;
+}
+
+function rowsHtml(){
+  const sorted = [...DATA.results].sort((a,b)=>(a.score??-1)-(b.score??-1));
+  return `<table class="rows"><thead><tr>
+    <th>Domain</th><th>Label</th><th>Source</th><th class="n">Score</th><th class="n">Conf</th>
+    <th>Decision</th><th>Correct at ${TH}</th><th>Reason codes</th></tr></thead><tbody>`
+    + sorted.map(r=>{
+      const scored = r.score!==null&&r.score!==undefined;
+      const predBad = scored ? r.score < TH : null;
+      const correct = scored ? (predBad === (r.true_label==="bad")) : null;
+      return `<tr>
+        <td><b>${r.domain}</b></td>
+        <td><span class="pill ${r.true_label}">${r.true_label}</span></td>
+        <td style="color:var(--muted)">${r.source||""}</td>
+        <td class="n">${scored?r.score:"—"}</td>
+        <td class="n">${r.confidence!=null?Math.round(r.confidence*100)+"%":"—"}</td>
+        <td>${r.decision||(r.error?"error":"—")}</td>
+        <td>${correct===null?"—":`<span class="pill ${correct?"hit":"miss"}">${correct?"✓":"✗"}</span>`}</td>
+        <td>${(r.reason_codes||[]).slice(0,4).map(c=>`<span class="code">${c}</span>`).join("")}</td>
+      </tr>`;}).join("") + `</tbody></table>`;
+}
+const _paint = paint;
+paint = function(){ _paint(); if($("rows")) $("rows").innerHTML = rowsHtml(); };
+</script>
+</body>
+</html>

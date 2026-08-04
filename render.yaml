@@ -2,5 +2,14 @@ services:
   - type: web
     name: merchant-risk
     runtime: python
-    buildCommand: ""
+    plan: free
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # Optional. Google Safe Browsing v4 is free but needs a key. Without one
+      # the engine falls back to a keyless Spamhaus DBL DNS lookup, and if that
+      # is unreachable the reputation signal drops out of the denominator.
+      - key: SAFE_BROWSING_API_KEY
+        sync: false
+      - key: MRI_PUBLIC_URL
+        sync: false
