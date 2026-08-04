@@ -141,6 +141,38 @@ Nothing here costs money.
 Nominatim was removed. Their usage policy caps you at one request per second and
 they block; it would have failed live.
 
+The only credential the app reads is `SAFE_BROWSING_API_KEY`, and it is optional.
+Every other outbound call — RDAP, the DBL lookup, the merchant's own site — needs
+no account. Confirm what a running instance is actually using at
+`/api/v1/policy` (`safe_browsing_key_configured`) and `/api/v1/health`.
+
+## Running on a free hosting tier
+
+`render.yaml` is set to the free plan. Two things follow from that, and the app
+is built to survive both:
+
+**The instance sleeps when idle.** A cold start takes about a minute, during
+which the first request hangs. The demo pre-warm runs automatically on boot and
+takes roughly twenty seconds after that, so the three buttons are cached before
+anyone clicks. Practically: open the page a couple of minutes before you need to
+show it, and it is warm.
+
+**There is no persistent disk.** SQLite lives on the container filesystem, so
+the audit trail and the 24 hour cache reset on every restart and redeploy. The
+decisions themselves are unaffected — the store is rebuilt empty and the demos
+re-warm — but do not expect last week's runs to still be there.
+
+That last point is why benchmark results are read from SQLite *first and then
+from `data/benchmark_results.json`*: a run triggered on the deployed instance is
+gone after the next restart, but a results file committed to the repository
+survives. Run the benchmark, commit the JSON, and `/benchmark` renders instantly
+on every future boot with no network calls at all.
+
+```
+python -m mri.benchmark
+git add data/benchmark_results.json && git commit -m "Benchmark run under policy_v1.0"
+```
+
 ## Tests
 
 ```
