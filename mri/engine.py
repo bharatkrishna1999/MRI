@@ -122,7 +122,10 @@ def _gather(domain: str, deadline: Deadline) -> Evidence:
 
 def _compute_signals(domain: str, declared: Declared, evidence: Evidence) -> list[Signal]:
     bundle = evidence.crawl or {}
-    inference = infer_category(bundle.get("combined_text", ""))
+    # Category is inferred from the pages that describe the offering, never from
+    # the terms and privacy boilerplate. See crawl.BOILERPLATE_CLASSES.
+    inference = infer_category(
+        bundle.get("category_text") or bundle.get("combined_text", ""))
 
     producers = [
         ("domain_age", lambda: sig_identity.domain_age(evidence.rdap)),

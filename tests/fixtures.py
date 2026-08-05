@@ -91,11 +91,64 @@ RESTRICTED_SITE = {
     "https://tokenlaunch.xyz/blog": _page("Blog", f"<p>{FILLER}</p>"),
 }
 
+# ── A payments platform: clean merchant, blocklist in its own acceptable-use ──
+# The shape that produced a false decline in production. Everything a payment
+# company, marketplace or compliance vendor publishes about the businesses it
+# *refuses* lives on its own domain, one link from the homepage, and reads to a
+# keyword scanner exactly like a merchant in all of those verticals at once.
+PAYMENTS_PLATFORM_SITE = {
+    "https://payflow.com/": _page("Payflow | Financial Infrastructure for the Internet", f"""
+      {NAV}
+      <a href="/legal/restricted-businesses">Restricted businesses</a>
+      <h1>Payflow</h1>
+      <p>Millions of companies use Payflow to accept payments online. Our B2B SaaS
+      dashboard, integrations and workflow automation let your team ship faster.
+      Book a demo or start free trial. Read the API reference and install the SDK.</p>
+      <p>We serve fintech, web3 and marketplace businesses. Pricing is $29 per month,
+      billed monthly, cancel anytime. Updated Apr 2026.</p>
+      <p>{FILLER}</p>
+      <footer>© 2011 Payflow Inc · support@payflow.com</footer>"""),
+    "https://payflow.com/legal/restricted-businesses": _page("Restricted businesses — Payflow", """
+      <h1>Restricted businesses</h1>
+      <p>The following categories are prohibited from using Payflow. Businesses in
+      violation of this policy will be offboarded.</p>
+      <ul>
+        <li>Casino, sportsbook and other gambling activity, including free spins
+            promotions and any wagering requirement.</li>
+        <li>Adult content, escort services and camgirl platforms.</li>
+        <li>Payday loan, cash advance and no credit check lending.</li>
+        <li>Credit repair and debt settlement services.</li>
+        <li>Multi-level marketing, downline recruitment and compensation plan schemes.</li>
+        <li>Pharmacy with no prescription, generic viagra and unlicensed medication.</li>
+        <li>Kratom, hemp flower, delta-8 and vape products.</li>
+        <li>Firearms, ammunition, AR-15 parts and suppressor sales.</li>
+        <li>Token sale, initial coin offering, presale and airdrop promotions.</li>
+      </ul>"""),
+    "https://payflow.com/pricing": _page("Pricing — Payflow", f"""
+      <h1>Plans</h1><p>Starter $29 per month. Team $99 per month.
+      All plans billed monthly, cancel anytime.</p><p>{FILLER}</p>"""),
+    "https://payflow.com/legal/terms": _page("Terms of Service", f"<h1>Terms of Service</h1><p>{POLICY_FILLER}</p>"),
+    "https://payflow.com/legal/privacy": _page("Privacy Policy", f"""
+      <h1>Privacy Policy</h1>
+      <p>You may complain to the ICO if you are unhappy with how we handle your data.</p>
+      <p>{POLICY_FILLER}</p>"""),
+    "https://payflow.com/legal/refunds": _page("Refund Policy", f"""
+      <h1>Refund Policy</h1><p>You may cancel your subscription at any time and request a
+      full refund within 30 days.</p><p>{POLICY_FILLER}</p>"""),
+    "https://payflow.com/contact": _page("Contact", """
+      <h1>Contact us</h1><p>Email support@payflow.com and a human replies within one
+      business day. Our support desk is staffed Monday to Friday. Postal address:
+      100 Market Street, San Francisco, California.</p>"""),
+    "https://payflow.com/docs": _page("Docs", f"<h1>API reference</h1><p>{FILLER}</p>"),
+    "https://payflow.com/blog": _page("Blog", f"<h1>Blog</h1><p>{FILLER}</p>"),
+}
+
 SITES = {
     "goodsaas.com": GOOD_SITE,
     "shellco.top": SHELL_SITE,
     "parkedthing.com": PARKED_SITE,
     "tokenlaunch.xyz": RESTRICTED_SITE,
+    "payflow.com": PAYMENTS_PLATFORM_SITE,
 }
 
 

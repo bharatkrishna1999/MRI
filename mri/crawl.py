@@ -33,6 +33,13 @@ PAGE_PATTERNS = [
 
 PAGE_CLASSES = [name for name, _ in PAGE_PATTERNS]
 
+# Pages that state the contract rather than the offering. They are worth
+# fetching — commercial legitimacy is scored on whether they exist — but they
+# are not evidence of what the merchant sells, and on a payments or marketplace
+# merchant the acceptable-use page is an inventory of the verticals it refuses.
+# Feeding that to category inference classifies a merchant as its own blocklist.
+BOILERPLATE_CLASSES = {"terms", "privacy", "refund"}
+
 
 def classify_link(link: dict) -> list[str]:
     """A link can serve two purposes; 'Terms & Refunds' is one page, two classes."""
@@ -111,6 +118,7 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
         "links_fetched": 0,
         "combined_text": "",
         "combined_html": "",
+        "category_text": "",
         "emails": [],
         "crawl_truncated": False,
     }
@@ -136,6 +144,8 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
 
     targets = _select_targets(links)
     fetched_texts, fetched_html = [parsed["text"]], [html]
+    # The homepage always describes the offering, so it always seeds this one.
+    offer_texts = [parsed["text"]]
 
     if targets and not deadline.expired():
         with ThreadPoolExecutor(max_workers=CRAWL_WORKERS) as pool:
@@ -166,6 +176,8 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
                 record["word_count"] = sub["word_count"]
                 fetched_texts.append(sub["text"])
                 fetched_html.append(result.get("body", ""))
+                if not BOILERPLATE_CLASSES.intersection(target["classes"]):
+                    offer_texts.append(sub["text"])
                 for cls in target["classes"]:
                     existing = bundle["pages"].get(cls)
                     # Prefer the page with real content over a stub redirect.
@@ -181,6 +193,7 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
 
     bundle["combined_text"] = " ".join(fetched_texts)[:400_000]
     bundle["combined_html"] = " ".join(fetched_html)[:1_200_000]
+    bundle["category_text"] = " ".join(offer_texts)[:400_000]
 
     from .netcalls import emails_in
 

@@ -13,6 +13,7 @@ os.environ["MRI_SKIP_WARM"] = "1"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from mri.api import app  # noqa: E402
+from mri.policy import POLICY_VERSION  # noqa: E402
 from tests import fixtures  # noqa: E402
 from tests.test_engine import fake_fetch_factory  # noqa: E402
 
@@ -69,7 +70,7 @@ class TestPages(unittest.TestCase):
 class TestPolicyEndpoint(unittest.TestCase):
     def test_exposes_the_versioned_policy(self):
         body = client.get("/api/v1/policy").json()
-        self.assertEqual(body["policy_version"], "policy_v1.0")
+        self.assertEqual(body["policy_version"], POLICY_VERSION)
         self.assertEqual(sum(body["category_weights"].values()), 100)
         self.assertEqual(len(body["signals"]), 24)
         self.assertEqual(len(body["bands"]), 4)
@@ -127,7 +128,7 @@ class TestAuditTrail(unittest.TestCase):
         replay = client.get(f"/api/v1/audit/{audit_id}").json()
         self.assertEqual(replay["domain"], "goodsaas.com")
         self.assertEqual(replay["score"], result["score"])
-        self.assertEqual(replay["policy_version"], "policy_v1.0")
+        self.assertEqual(replay["policy_version"], POLICY_VERSION)
         # Raw signal values survive, not just the score.
         self.assertEqual(len(replay["signals"]), 24)
         self.assertTrue(any(s["raw"] for s in replay["signals"]))

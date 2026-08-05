@@ -43,10 +43,25 @@ def category_tier(bundle: dict, inference: dict) -> "Signal":
     evidence = ", ".join(inference.get("hits", [])[:4]) or "keyword profile"
 
     if tier == TIER_RESTRICTED:
+        if not inference.get("confident", True):
+            # Thin evidence. A restricted call is the one finding in this policy
+            # that declines an application by itself, and a decline that rests on
+            # a couple of incidental words is a decline we cannot defend to the
+            # merchant. Route it to a reviewer who can read the page instead.
+            runner_up = inference.get("runner_up", 0)
+            return ok("category_tier", f"{label} (restricted, unconfirmed)", 40,
+                      f"Site content weakly reads as {label} on {inference.get('score', 0)} keyword "
+                      f"match(es) (matched: {evidence}), no stronger than the {runner_up} match(es) "
+                      f"for an acceptable category, so it is sent for human review rather than "
+                      f"declined on the keyword scan alone.",
+                      ["CATEGORY_RESTRICTED_REVIEW"], category=category, tier=tier,
+                      confident=False, hits=inference.get("hits", []),
+                      ranked=inference.get("ranked", []))
         return ok("category_tier", f"{label} (restricted)", 5,
                   f"Site content reads as {label}, which is on the restricted list and cannot be boarded (matched: {evidence}).",
                   ["CATEGORY_RESTRICTED"], category=category, tier=tier,
-                  hits=inference.get("hits", []), ranked=inference.get("ranked", []))
+                  confident=True, hits=inference.get("hits", []),
+                  ranked=inference.get("ranked", []))
     if tier == TIER_ELEVATED:
         return ok("category_tier", f"{label} (elevated)", 55,
                   f"Site content reads as {label}, an elevated-risk vertical that boards only with a reserve (matched: {evidence}).",
@@ -102,7 +117,10 @@ def restricted_keywords(bundle: dict) -> "Signal":
     if not bundle.get("root_ok"):
         return unavailable("restricted_keywords", "No page content was retrieved, so the keyword scan could not run.")
 
-    hits = scan_restricted_keywords(bundle.get("combined_text", ""))
+    # Same corpus as the category inference: what the merchant sells, not the
+    # acceptable-use page listing what it refuses to sell.
+    hits = scan_restricted_keywords(
+        bundle.get("category_text") or bundle.get("combined_text", ""))
 
     if not hits:
         return ok("restricted_keywords", "0 hits", 100,

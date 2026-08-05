@@ -193,6 +193,174 @@ class TestRestrictedCategory(unittest.TestCase):
         self.assertEqual(lying["band"], "auto_approve")
 
 
+class TestBlocklistIsNotACatalogue(unittest.TestCase):
+    """
+    A merchant's acceptable-use page names every vertical it refuses to serve.
+    Reading that as a description of the merchant declines the most compliant
+    applicants in the book — the ones who publish an acceptable-use policy.
+    """
+
+    def setUp(self):
+        self.result = run_against("payflow.com", fixtures.PAYMENTS_PLATFORM_SITE)
+
+    def test_the_merchant_is_not_classified_as_its_own_blocklist(self):
+        tier = self._signal("category_tier")
+        self.assertEqual(tier["detail"]["tier"], "standard", tier["raw"])
+
+    def test_it_is_not_declined(self):
+        codes = {c["code"] for c in self.result["reason_codes"]}
+        self.assertNotIn("CATEGORY_RESTRICTED", codes)
+        self.assertNotIn("RESTRICTED_KEYWORDS", codes)
+        self.assertNotEqual(self.result["band"], "decline")
+
+    def test_the_blocklist_page_still_counts_as_a_terms_page(self):
+        # Excluded from category inference, not from the crawl: commercial
+        # legitimacy is still scored on whether the merchant publishes terms.
+        self.assertEqual(self._signal("terms_page")["normalized"], 100)
+
+    def test_prohibited_verticals_are_stripped_from_the_offering_text(self):
+        from mri.taxonomy import strip_prohibited_context
+
+        kept = strip_prohibited_context(
+            "We sell design templates. Casinos and payday loan sites are prohibited.")
+        self.assertIn("design templates", kept)
+        self.assertNotIn("casino", kept.lower())
+
+    def test_the_ico_a_privacy_policy_names_is_the_regulator(self):
+        from mri.taxonomy import scan_restricted_keywords
+
+        self.assertEqual(
+            scan_restricted_keywords("You may complain to the ICO about our data handling."),
+            [])
+
+    def test_a_dateline_is_not_a_lending_product(self):
+        from mri.taxonomy import infer_category
+
+        text = ("Our design studio publishes case studies and client work. " * 6
+                + "Last updated Apr 2026.")
+        self.assertNotEqual(infer_category(text)["tier"], "restricted")
+
+    def _signal(self, key):
+        return next(s for s in self.result["signals"] if s["key"] == key)
+
+
+class TestThinRestrictedEvidence(unittest.TestCase):
+    def test_a_single_stray_keyword_is_not_confident(self):
+        from mri.taxonomy import infer_category
+
+        inference = infer_category(
+            "Our studio writes long form essays about the history of the printing press "
+            "and the people who ran it for four centuries. One essay mentions web3.")
+        self.assertEqual(inference["tier"], "restricted")
+        self.assertEqual(inference["score"], 1)
+        self.assertFalse(inference["confident"])
+
+    def test_a_tie_still_classifies_as_restricted_but_does_not_decline(self):
+        """
+        The tie-break stays as the policy wrote it — read the riskier of two
+        equal readings — but an even split is a question, not a verdict.
+        """
+        from mri.taxonomy import infer_category
+
+        inference = infer_category(
+            "We sell an ebook and a printable planner for new writers. The ebook chapters "
+            "cover web3 and defi for beginners in plain language with no jargon at all.")
+        self.assertEqual(inference["category"], "crypto_tokens")
+        self.assertEqual(inference["score"], inference["runner_up"])
+        self.assertFalse(inference["confident"])
+
+    def test_an_unconfirmed_restricted_read_caps_at_manual_review(self):
+        from mri.policy import BAND_OVERRIDES
+
+        self.assertEqual(BAND_OVERRIDES["CATEGORY_RESTRICTED_REVIEW"], "manual_review")
+        self.assertEqual(BAND_OVERRIDES["CATEGORY_RESTRICTED"], "decline")
+
+    def test_a_site_that_really_is_restricted_still_declines_outright(self):
+        result = run_against("tokenlaunch.xyz", fixtures.RESTRICTED_SITE)
+        codes = {c["code"] for c in result["reason_codes"]}
+        self.assertIn("CATEGORY_RESTRICTED", codes)
+        self.assertNotIn("CATEGORY_RESTRICTED_REVIEW", codes)
+        self.assertEqual(result["band"], "decline")
+
+
+class TestRedirectsRespectTheDeadline(unittest.TestCase):
+    """
+    httpx applies its timeout per request attempt, so following redirects inside
+    the client turns a 3 second per-call budget into 3 seconds times the chain
+    length. That is how an evaluation with an 8 second budget took 20 seconds.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import socketserver
+        import threading
+        import time as _time
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path.startswith("/r/"):
+                    n = int(self.path.split("/")[2])
+                    self._redirect(f"/r/{n - 1}" if n > 1 else "/final")
+                elif self.path == "/loop":
+                    self._redirect("/loop")
+                elif self.path == "/slow":
+                    _time.sleep(1.0)
+                    self._redirect("/slow")
+                else:
+                    body = b"<html><title>Final</title><body>arrived</body></html>"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            def _redirect(self, to):
+                self.send_response(302)
+                self.send_header("Location", to)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        cls.server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_a_chain_is_followed_to_the_final_page(self):
+        from mri.netcalls import Deadline, fetch
+
+        result = fetch(f"{self.base}/r/3", Deadline(8.0))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], 200)
+        self.assertTrue(result["url"].endswith("/final"))
+        self.assertIn("arrived", result["body"])
+
+    def test_an_endless_chain_terminates(self):
+        from mri.netcalls import Deadline, fetch
+
+        result = fetch(f"{self.base}/loop", Deadline(8.0))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "redirect loop")
+
+    def test_a_slow_chain_stops_at_the_budget_not_a_multiple_of_it(self):
+        import time as _time
+
+        from mri.netcalls import Deadline, fetch
+
+        started = _time.monotonic()
+        fetch(f"{self.base}/slow", Deadline(2.0), timeout=3.0)
+        elapsed = _time.monotonic() - started
+        # Every hop is re-budgeted from the shared deadline, so this is bounded
+        # by the 2 second budget rather than 5 hops times the 3 second timeout.
+        self.assertLess(elapsed, 4.0, f"redirect chain ran {elapsed:.1f}s past its budget")
+
+
 class TestSafeBrowsingHit(unittest.TestCase):
     def test_a_threat_feed_hit_declines_a_perfect_site(self):
         result = run_against(
