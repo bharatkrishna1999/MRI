@@ -768,6 +768,13 @@ function renderPlain(m){
   if(!s){ $("v_business").innerHTML = ""; $("v_why").innerHTML = ""; return; }
   const model = s.model || null;
 
+  // Three states, not two. A rewrite that was configured and then failed used
+  // to render the same byline as one that was never switched on, which made a
+  // broken key, a timeout and an unset variable look identical from outside.
+  const failed = !model && s.model_error
+    ? ` A rewrite was configured but did not complete (${esc(s.model_error)}), so the engine's own wording is shown.`
+    : "";
+
   // What the business is.
   const b = s.business || {};
   let bh = "";
@@ -776,7 +783,7 @@ function renderPlain(m){
   $("v_business").innerHTML = bh;
   $("v_business_by").innerHTML = model
     ? `Rewritten by <b>${esc(model.model)}</b> from the engine's own summary. The engine's version is kept in the record.`
-    : esc(b.source || "");
+    : esc(b.source || "") + failed;
 
   // Why the decision.
   const w = s.why || {};
@@ -801,7 +808,7 @@ function renderPlain(m){
   $("v_why").innerHTML = wh;
   $("v_why_by").innerHTML = model
     ? `Rewritten by <b>${esc(model.model)}</b> after the decision was final. A model never scores, overrides or reviews a decision here — it only rewords one.`
-    : `Written by the engine from the signals below. No model was involved.`;
+    : `Written by the engine from the signals below. No model was involved.` + failed;
 }
 
 // T1: the Advanced panel comes back prefilled from what enrichment found.
