@@ -41,6 +41,7 @@ from .signals import payment as sig_payment
 from .signals import reputation as sig_reputation
 from .signals.base import OK, Signal, unavailable
 from .taxonomy import infer_category
+from .trace import Trace
 
 
 @dataclass
@@ -78,7 +79,13 @@ def _gather(domain: str, deadline: Deadline) -> Evidence:
     RDAP, DNS, the root page and the reputation lookup do not depend on each
     other, so they share one wall-clock window instead of four.
     """
+    trace = deadline.trace
     evidence = Evidence()
+
+    trace.event("enrich", "Enrichment fan-out", "info",
+                "4 independent lookups on one wall-clock window — RDAP, DNS A, "
+                f"storefront root, threat feed · {deadline.remaining():.1f}s of budget left")
+
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
             "rdap": pool.submit(rdap_lookup, domain, deadline),
@@ -92,6 +99,7 @@ def _gather(domain: str, deadline: Deadline) -> Evidence:
                 results[name] = future.result(timeout=max(0.1, deadline.remaining() + 1.0))
             except Exception as exc:
                 results[name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                trace.event("enrich", f"{name} lookup", "error", f"{type(exc).__name__}: {exc}")
 
     evidence.rdap = results["rdap"]
     evidence.dns = results["dns"]
@@ -99,12 +107,23 @@ def _gather(domain: str, deadline: Deadline) -> Evidence:
     root = results["root"]
 
     ip = (evidence.dns or {}).get("ip")
-    evidence.geoip = geoip.country_for_ip(ip) if ip else {
-        "ok": False, "error": (evidence.dns or {}).get("error", "no A record resolved")
-    }
+    with trace.step("enrich", "GeoLite2 country lookup",
+                    "local mmdb read — no outbound call, no rate limit") as step:
+        evidence.geoip = geoip.country_for_ip(ip) if ip else {
+            "ok": False, "error": (evidence.dns or {}).get("error", "no A record resolved")
+        }
+        if evidence.geoip.get("country"):
+            step["detail"] = (f"{ip} → {evidence.geoip['country']} "
+                              f"({evidence.geoip.get('country_name')})")
+        else:
+            step["status"] = "warn"
+            step["detail"] = evidence.geoip.get("error") or f"{ip}: no country in the database"
 
     # TLS inspection and the depth-1 crawl both need the root result, and both
     # want whatever budget is left.
+    trace.event("crawl", "Crawl phase", "info",
+                "TLS inspection and the depth-1 crawl share the remaining "
+                f"{deadline.remaining():.1f}s")
     with ThreadPoolExecutor(max_workers=2) as pool:
         tls_future = pool.submit(tls_info, domain, deadline)
         crawl_future = pool.submit(crawl_site, domain, root, deadline)
@@ -112,20 +131,40 @@ def _gather(domain: str, deadline: Deadline) -> Evidence:
             evidence.tls = tls_future.result(timeout=max(0.1, deadline.remaining() + 1.0))
         except Exception as exc:
             evidence.tls = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            trace.event("enrich", "TLS inspection", "error", f"{type(exc).__name__}: {exc}")
         try:
             evidence.crawl = crawl_future.result(timeout=max(0.1, deadline.remaining() + 2.0))
         except Exception as exc:
             evidence.crawl = {"root_ok": False, "root_error": f"{type(exc).__name__}: {exc}"}
+            trace.event("crawl", "Crawl", "error", f"{type(exc).__name__}: {exc}")
 
     return evidence
 
 
-def _compute_signals(domain: str, declared: Declared, evidence: Evidence) -> list[Signal]:
+def _compute_signals(domain: str, declared: Declared, evidence: Evidence,
+                     trace: Trace) -> list[Signal]:
     bundle = evidence.crawl or {}
     # Category is inferred from the pages that describe the offering, never from
     # the terms and privacy boilerplate. See crawl.BOILERPLATE_CLASSES.
-    inference = infer_category(
-        bundle.get("category_text") or bundle.get("combined_text", ""))
+    category_text = bundle.get("category_text") or bundle.get("combined_text", "")
+    with trace.step("infer", "Acceptance-taxonomy inference",
+                    f"scoring {len(category_text.split()):,} words of offering copy "
+                    "against the category lexicon") as step:
+        inference = infer_category(category_text)
+        if inference.get("category"):
+            top = (inference.get("ranked") or [{}])[0]
+            runners = ", ".join(
+                f"{r['category']} {r['hits']}" for r in (inference.get("ranked") or [])[1:4])
+            step["status"] = "warn" if inference.get("tier") == "restricted" else "ok"
+            step["detail"] = (
+                f"{top.get('label') or inference['category']} · {inference.get('tier')} tier · "
+                f"{inference.get('score')} lexicon hits"
+                + (f" ({', '.join(inference.get('hits', [])[:3])})" if inference.get("hits") else "")
+                + (f" · runners-up: {runners}" if runners else "")
+                + ("" if inference.get("confident") else " · reading too thin to decline on"))
+        else:
+            step["status"] = "warn"
+            step["detail"] = "no category matched the site's own copy"
 
     producers = [
         ("domain_age", lambda: sig_identity.domain_age(evidence.rdap)),
@@ -158,15 +197,34 @@ def _compute_signals(domain: str, declared: Declared, evidence: Evidence) -> lis
             declared.email or None, domain, bundle)),
     ]
 
+    trace.event("signals", "Scoring the policy", "info",
+                f"{len(producers)} signals across {len(CATEGORY_WEIGHTS)} categories, "
+                f"{TOTAL_WEIGHT} weight points, no further network calls")
+
     signals = []
     for key, producer in producers:
         try:
-            signals.append(producer())
+            signal = producer()
         except Exception as exc:
             # A bug in one scorer must not take down the decision. It becomes an
             # unavailable signal like any other upstream failure.
-            signals.append(unavailable(
-                key, f"This signal raised an internal error and was excluded ({type(exc).__name__}: {exc})."))
+            signal = unavailable(
+                key, f"This signal raised an internal error and was excluded ({type(exc).__name__}: {exc}).")
+            trace.event("signals", signal.label, "error",
+                        f"{type(exc).__name__}: {exc} — dropped from the denominator")
+        else:
+            if signal.status == OK:
+                trace.event("signals", signal.label, "ok",
+                            f"{signal.raw} → {signal.normalized}/100 × {signal.weight} pts "
+                            f"= {signal.contribution:.2f}"
+                            + (f" · {', '.join(signal.codes)}" if signal.codes else ""),
+                            signal=signal.key, normalized=signal.normalized,
+                            weight=signal.weight, why=signal.reason)
+            else:
+                trace.event("signals", signal.label, "warn",
+                            f"unavailable · −{signal.weight} pts off the denominator",
+                            signal=signal.key, weight=signal.weight, why=signal.reason)
+        signals.append(signal)
     return signals
 
 
@@ -212,22 +270,38 @@ def _by_category(signals: list[Signal]) -> list[dict]:
 
 
 def evaluate(domain_input: str, declared: Declared | None = None,
-             timeout: float = GLOBAL_TIMEOUT_S) -> dict:
+             timeout: float = GLOBAL_TIMEOUT_S, trace: Trace | None = None) -> dict:
     """
     Run the full policy against one domain and return a complete decision.
 
     Never raises for network reasons. Raises InvalidDomain only when the input
     is not a domain at all, which is a form-validation error, not a verdict.
+
+    Pass a `trace` to watch it happen; one is created either way and the events
+    are returned under `trace`, so a decision read back out of the audit table
+    still carries the calls that produced it.
     """
     from .decision import decide
 
     started = time.monotonic()
     declared = declared or Declared()
+    trace = trace or Trace()
     domain = normalize_domain(domain_input)
 
-    deadline = Deadline(timeout)
+    if domain != domain_input.strip():
+        trace.event("input", "Normalised the input", "ok",
+                    f"“{domain_input.strip()}” → {domain} (registrable domain, "
+                    "public-suffix aware)")
+    if not declared.is_empty():
+        trace.event("input", "Declared context supplied", "info",
+                    "compared against what the site says, never scored directly")
+
+    deadline = Deadline(timeout, trace=trace)
+    trace.event("input", "Evaluation started", "ok",
+                f"{domain} · policy {POLICY_VERSION} · {timeout:.0f}s global budget")
+
     evidence = _gather(domain, deadline)
-    signals = _compute_signals(domain, declared, evidence)
+    signals = _compute_signals(domain, declared, evidence, trace)
     scoring = _score(signals)
 
     codes = []
@@ -239,10 +313,35 @@ def evaluate(domain_input: str, declared: Declared | None = None,
     if scoring["confidence"] < CONFIDENCE_FLOOR and "LOW_CONFIDENCE" not in codes:
         codes.append("LOW_CONFIDENCE")
 
+    trace.event(
+        "score",
+        "Weighted score" if scoring["score"] is not None else "Nothing could be scored",
+        "ok" if scoring["score"] is not None else "error",
+        (f"{scoring.get('raw_points', 0)} of {scoring['computed_weight']} available points "
+         f"= {scoring['score']}/100 · confidence {round(scoring['confidence'] * 100)}% "
+         f"({scoring['computed_weight']}/{TOTAL_WEIGHT} weight computed, "
+         f"{scoring['missing_weight']} dropped)")
+        if scoring["score"] is not None else
+        "every signal in the policy failed to compute — held, not declined")
+
+    if codes:
+        trace.event("score", "Reason codes raised", "warn", " ".join(codes))
+
     decision = decide(scoring, codes, signals)
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
+    for override in decision.get("overrides_applied", []) or []:
+        trace.event("decide", "Policy override", "warn",
+                    f"{override.get('code')} caps the outcome at "
+                    f"{override.get('capped_at') or decision['decision']} regardless of score")
+    trace.event("decide", decision["decision"], "ok",
+                f"band {decision['band']} · reserve "
+                f"{decision['reserve_pct'] if decision['reserve_pct'] is not None else '—'}% · "
+                f"payout {decision['payout'] or '—'} · decided in {elapsed_ms} ms"
+                + (" · the global deadline expired mid-run" if deadline.expired() else ""))
+
     return {
+        "trace": trace.events,
         "domain": domain,
         "input": domain_input,
         "policy_version": POLICY_VERSION,

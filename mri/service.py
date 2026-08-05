@@ -10,8 +10,9 @@ import threading
 import time
 
 from .engine import Declared, evaluate
-from .policy import CACHE_TTL_S, GLOBAL_TIMEOUT_S
+from .policy import CACHE_TTL_S, GLOBAL_TIMEOUT_S, POLICY_VERSION
 from .store import cached, record
+from .trace import Trace
 
 # T8 — three prefilled demos, one per outcome we want to be able to show.
 DEMO_DOMAINS = [
@@ -47,31 +48,61 @@ _warm_lock = threading.Lock()
 
 
 def run(domain_input: str, declared: Declared | None = None,
-        use_cache: bool = True, timeout: float = GLOBAL_TIMEOUT_S) -> dict:
+        use_cache: bool = True, timeout: float = GLOBAL_TIMEOUT_S,
+        sink=None) -> dict:
     """
     Evaluate a domain, preferring a cached decision under 24 hours old.
 
     The cache key is the normalised domain plus the policy version. Declared
     context does not participate in the key when it is empty, which is the
     normal case: the single-field form sends nothing but a domain.
+
+    `sink` is a callable that receives every trace event as it is recorded. The
+    SSE endpoint passes one so the browser can watch the run; everything else
+    leaves it unset and reads `result["trace"]` at the end.
     """
     from .domains import normalize_domain
 
+    trace = Trace(sink=sink)
     domain = normalize_domain(domain_input)
     declared = declared or Declared()
 
     if use_cache and declared.is_empty():
-        hit = cached(domain)
+        with trace.step("cache", "Cache lookup",
+                        f"most recent {domain} decision under {POLICY_VERSION} "
+                        f"inside {CACHE_TTL_S // 3600}h") as step:
+            hit = cached(domain)
+            if hit:
+                step["detail"] = (f"hit — audit id {hit.get('audit_id')}, decided "
+                                  f"{hit.get('cache_age_s')}s ago; no calls made")
+            else:
+                step["detail"] = "miss — evaluating live"
         if hit:
+            # The stored trace belongs to the run that produced the decision, not
+            # to this one. Keep it, but say plainly which is which.
+            hit["trace_of_cached_run"] = hit.get("trace", [])
+            hit["trace"] = trace.events
             return hit
+    else:
+        trace.event("cache", "Cache bypassed", "info",
+                    "declared context supplied" if not declared.is_empty()
+                    else "live run requested — every call will be made again")
 
-    result = evaluate(domain_input, declared, timeout=timeout)
+    result = evaluate(domain_input, declared, timeout=timeout, trace=trace)
     result["cached"] = False
-    try:
-        result["audit_id"] = record(result)
-    except Exception as exc:
-        result["audit_id"] = None
-        result["persistence_error"] = f"{type(exc).__name__}: {exc}"
+    with trace.step("persist", "Writing the audit record",
+                    "SQLite — inputs, every raw signal value, the policy version") as step:
+        try:
+            result["audit_id"] = record(result)
+            step["detail"] = f"audit id {result['audit_id']} · replayable at /api/v1/audit/{result['audit_id']}"
+        except Exception as exc:
+            result["audit_id"] = None
+            result["persistence_error"] = f"{type(exc).__name__}: {exc}"
+            step["status"], step["detail"] = "error", f"{type(exc).__name__}: {exc}"
+    # Re-read the trace so the returned decision includes the persist step. The
+    # row already written holds the trace as it stood a moment earlier, which is
+    # the honest thing for it to hold.
+    result["trace"] = trace.events
     return result
 
 

@@ -2,52 +2,61 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1220'/%3E%3Cpath d='M8 22V10l8 7 8-7v12' stroke='%231f5eff' stroke-width='3' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
 <title>Benchmark — Merchant Risk Intelligence</title>
 <style>
 :root{
   --bg:#f6f7f9;--panel:#fff;--ink:#0b1220;--muted:#5b6577;--line:#e4e8ee;
   --brand:#1f5eff;--good:#0f9d58;--bad:#d92d20;--warn:#e8a317;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --gutter:24px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
 body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
-     background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+     background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;overflow-x:hidden}
 a{color:var(--brand);text-decoration:none}
-.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+.wrap{max-width:1180px;margin:0 auto;
+      padding-left:max(var(--gutter),env(safe-area-inset-left));
+      padding-right:max(var(--gutter),env(safe-area-inset-right))}
 header{background:#0b1220;color:#fff;padding:14px 0}
-header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.brand{font-weight:700;letter-spacing:-.2px}
+header .wrap{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:-.2px;font-size:15px}
 .brand span{opacity:.55;font-weight:400}
-.hnav{display:flex;align-items:center;gap:18px;font-size:13px}
-.hnav a{color:#c8d2e4}
+.hnav{display:flex;align-items:center;gap:16px;font-size:13px;flex-wrap:wrap}
+.hnav a{color:#c8d2e4;padding:4px 0}
 .chip{font-family:var(--mono);font-size:11px;background:#1b2740;color:#8fb0ff;
   padding:4px 9px;border-radius:5px;border:1px solid #2a3a5c}
 
 .hero{padding:32px 0 18px}
-h1{font-size:28px;letter-spacing:-.6px;margin-bottom:6px}
+h1{font-size:clamp(22px,5.2vw,28px);letter-spacing:-.6px;margin-bottom:6px;text-wrap:balance}
 .sub{color:var(--muted);max-width:760px}
-.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px;
+  margin-bottom:16px;min-width:0}
 .card h3{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:14px}
 
-.headline{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:16px}
+.headline{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin-bottom:16px}
 .stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px}
-.stat b{display:block;font-size:38px;letter-spacing:-1.4px;line-height:1.05}
+.stat b{display:block;font-size:clamp(28px,7vw,38px);letter-spacing:-1.4px;line-height:1.05}
 .stat span{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted)}
 .stat small{display:block;font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.45}
 .stat.p b{color:var(--brand)} .stat.r b{color:var(--good)} .stat.f b{color:#7c5cff} .stat.x b{color:var(--bad)}
 
 .sliderrow{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-input[type=range]{flex:1;min-width:260px;accent-color:var(--brand)}
+input[type=range]{flex:1 1 180px;min-width:0;accent-color:var(--brand);height:34px}
 .thval{font-family:var(--mono);font-size:26px;font-weight:700;min-width:56px;text-align:right}
 
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.grid2>div{min-width:0}
 @media(max-width:900px){.grid2{grid-template-columns:1fr}}
 
-table.cm{border-collapse:collapse;width:100%;font-size:13px;max-width:520px}
-table.cm td,table.cm th{border:1px solid var(--line);padding:12px;text-align:center}
+table.cm{border-collapse:collapse;width:100%;min-width:400px;font-size:13px;max-width:520px}
+table.cm td,table.cm th{border:1px solid var(--line);padding:10px;text-align:center}
 table.cm th{background:#fafbfd;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
-table.cm td b{font-size:26px;display:block;line-height:1.15}
+table.cm td b{font-size:clamp(20px,5.5vw,26px);display:block;line-height:1.15}
 td.tp{background:#eef7f1}td.tp b{color:var(--good)}
 td.tn{background:#eef7f1}td.tn b{color:var(--good)}
 td.fp{background:#fdf1f0}td.fp b{color:var(--bad)}
@@ -58,7 +67,7 @@ svg{width:100%;height:auto;display:block}
 .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:10px}
 .legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 
-table.rows{width:100%;border-collapse:collapse;font-size:12.5px}
+table.rows{width:100%;min-width:640px;border-collapse:collapse;font-size:12.5px}
 table.rows th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);
   padding:0 8px 8px;border-bottom:1px solid var(--line)}
 table.rows td{padding:7px 8px;border-bottom:1px solid #f1f3f7}
@@ -70,10 +79,25 @@ table.rows td.n{text-align:right;font-family:var(--mono)}
   border-radius:3px;margin-right:3px}
 .empty{text-align:center;padding:50px 20px;color:var(--muted)}
 button.run{font:inherit;font-weight:600;background:var(--brand);color:#fff;border:0;border-radius:8px;
-  padding:11px 22px;cursor:pointer}
+  padding:13px 22px;cursor:pointer;min-height:48px}
 button.run:disabled{background:#9db4e8;cursor:progress}
 .note{font-size:12px;color:var(--muted);line-height:1.6;margin-top:12px}
-footer{border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);font-size:12px}
+footer{border-top:1px solid var(--line);color:var(--muted);font-size:12px;
+  padding:22px 0 max(40px,env(safe-area-inset-bottom))}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
+
+@media(max-width:640px){
+  :root{--gutter:16px}
+  body{font-size:14.5px}
+  .hero{padding:22px 0 14px}
+  .card{padding:15px}
+  .stat{padding:14px}
+  .thval{font-size:20px;min-width:42px}
+  .legend{flex-wrap:wrap;gap:10px}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
 </style>
 </head>
 <body>
@@ -199,12 +223,12 @@ function paint(){
     <div class="stat x"><span>False positive rate</span><b>${pc(m.false_positive_rate)}</b>
       <small>${m.fp} of ${m.fp+m.tn} good merchants turned away.</small></div>`;
 
-  $("cm").innerHTML = `<table class="cm">
+  $("cm").innerHTML = `<div class="tablewrap"><table class="cm">
     <tr><th></th><th>Predicted decline</th><th>Predicted approve</th></tr>
     <tr><td class="lab">Actually bad</td><td class="tp"><b>${m.tp}</b>true positive</td>
         <td class="fn"><b>${m.fn}</b>false negative — fraud boarded</td></tr>
     <tr><td class="lab">Actually good</td><td class="fp"><b>${m.fp}</b>false positive — revenue lost</td>
-        <td class="tn"><b>${m.tn}</b>true negative</td></tr></table>`;
+        <td class="tn"><b>${m.tn}</b>true negative</td></tr></table></div>`;
   $("cmnote").textContent = `At threshold ${TH}, accuracy is ${pc(m.accuracy)}`
     + (m.unscored ? `. ${m.unscored} domain(s) could not be scored at all and are excluded from the matrix.` : ".");
 
@@ -262,7 +286,7 @@ function drawCurve(){
 
 function rowsHtml(){
   const sorted = [...DATA.results].sort((a,b)=>(a.score??-1)-(b.score??-1));
-  return `<table class="rows"><thead><tr>
+  return `<div class="tablewrap"><table class="rows"><thead><tr>
     <th>Domain</th><th>Label</th><th>Source</th><th class="n">Score</th><th class="n">Conf</th>
     <th>Decision</th><th>Correct at ${TH}</th><th>Reason codes</th></tr></thead><tbody>`
     + sorted.map(r=>{
@@ -278,7 +302,7 @@ function rowsHtml(){
         <td>${r.decision||(r.error?"error":"—")}</td>
         <td>${correct===null?"—":`<span class="pill ${correct?"hit":"miss"}">${correct?"✓":"✗"}</span>`}</td>
         <td>${(r.reason_codes||[]).slice(0,4).map(c=>`<span class="code">${c}</span>`).join("")}</td>
-      </tr>`;}).join("") + `</tbody></table>`;
+      </tr>`;}).join("") + `</tbody></table></div>`;
 }
 const _paint = paint;
 paint = function(){ _paint(); if($("rows")) $("rows").innerHTML = rowsHtml(); };

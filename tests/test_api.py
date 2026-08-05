@@ -1,6 +1,7 @@
 """HTTP surface tests, including the audit trail and the documented curl."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -13,7 +14,7 @@ os.environ["MRI_SKIP_WARM"] = "1"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from mri.api import app  # noqa: E402
-from mri.policy import POLICY_VERSION  # noqa: E402
+from mri.policy import POLICY_VERSION, SIGNAL_SPEC  # noqa: E402
 from tests import fixtures  # noqa: E402
 from tests.test_engine import fake_fetch_factory  # noqa: E402
 
@@ -160,6 +161,105 @@ class TestBenchmarkEndpoints(unittest.TestCase):
         self.assertIn(response.status_code, (200, 404))
         if response.status_code == 404:
             self.assertIn("hint", response.json())
+
+
+class TestEvaluationStream(unittest.TestCase):
+    """The SSE surface behind the live console."""
+
+    def _drain(self, url):
+        events = []
+        with client.stream("GET", url) as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("text/event-stream", response.headers["content-type"])
+            name = None
+            for line in response.iter_lines():
+                if line.startswith("event: "):
+                    name = line[7:]
+                elif line.startswith("data: ") and name:
+                    events.append((name, json.loads(line[6:])))
+        return events
+
+    def test_the_run_is_narrated_then_the_decision_arrives(self):
+        with _Patched():
+            events = self._drain(
+                "/api/v1/evaluate/stream?domain=goodsaas.com&refresh=true")
+
+        names = [name for name, _ in events]
+        self.assertEqual(names[0], "start")
+        self.assertEqual(names[-1], "done")
+        self.assertEqual(names.count("result"), 1)
+
+        trace = [payload for name, payload in events if name == "trace"]
+        self.assertGreater(len(trace), 20, "a full run is more than twenty steps")
+        for event in trace:
+            self.assertLessEqual({"id", "t_ms", "phase", "label", "status"}, set(event))
+
+        phases = {event["phase"] for event in trace}
+        self.assertTrue({"enrich", "signals", "score", "decide"} <= phases, phases)
+
+        # Every signal in the policy reports itself, computed or not.
+        scored = {event["signal"] for event in trace if event.get("signal")}
+        self.assertEqual(len(scored), len(SIGNAL_SPEC))
+
+        # The decision on the stream is the decision the JSON API would return.
+        result = next(payload for name, payload in events if name == "result")
+        self.assertEqual(result["domain"], "goodsaas.com")
+        self.assertIn("decision", result)
+        self.assertIn("curl", result["api"])
+
+    def test_running_steps_are_closed_by_a_terminal_event(self):
+        with _Patched():
+            events = self._drain(
+                "/api/v1/evaluate/stream?domain=goodsaas.com&refresh=true")
+        trace = [payload for name, payload in events if name == "trace"]
+        opened = {event["id"] for event in trace if event["status"] == "running"}
+        closed = {event["ref"] for event in trace if event.get("ref")}
+        self.assertEqual(opened, closed, "every running line must be resolved")
+
+    def test_a_non_domain_fails_on_the_stream_rather_than_hanging(self):
+        events = self._drain("/api/v1/evaluate/stream?domain=not%20a%20domain%20!!")
+        names = [name for name, _ in events]
+        self.assertIn("failed", names)
+        self.assertNotIn("result", names)
+        failure = next(payload for name, payload in events if name == "failed")
+        self.assertEqual(failure["status"], 400)
+
+    def test_event_names_do_not_collide_with_eventsource_builtins(self):
+        # EventSource dispatches its own `open` and `error`; a server event of
+        # either name would be indistinguishable from a transport failure.
+        with _Patched():
+            events = self._drain(
+                "/api/v1/evaluate/stream?domain=goodsaas.com&refresh=true")
+        names = {name for name, _ in events}
+        self.assertNotIn("open", names)
+        self.assertNotIn("error", names)
+
+
+class TestTraceInTheJson(unittest.TestCase):
+    def test_the_plain_json_carries_the_same_trace(self):
+        with _Patched():
+            body = client.get(
+                "/api/v1/evaluate?domain=goodsaas.com&refresh=true").json()
+        self.assertGreater(len(body["trace"]), 20)
+        self.assertEqual(body["trace"][0]["id"], 1)
+
+    def test_a_cache_hit_keeps_the_two_timelines_apart(self):
+        with _Patched():
+            client.get("/api/v1/evaluate?domain=cachedsaas.com&refresh=true")
+            body = client.get("/api/v1/evaluate?domain=cachedsaas.com").json()
+        self.assertTrue(body["cached"])
+        # This request did almost nothing, and says so.
+        self.assertEqual([e["phase"] for e in body["trace"]], ["cache", "cache"])
+        self.assertIn("hit", body["trace"][-1]["detail"])
+        # The run that actually made the calls is kept, separately.
+        self.assertGreater(len(body["trace_of_cached_run"]), 20)
+
+    def test_the_stored_audit_record_replays_with_its_trace(self):
+        with _Patched():
+            body = client.get(
+                "/api/v1/evaluate?domain=auditedsaas.com&refresh=true").json()
+        replay = client.get(f"/api/v1/audit/{body['audit_id']}").json()
+        self.assertGreater(len(replay["trace"]), 20)
 
 
 class TestHealth(unittest.TestCase):

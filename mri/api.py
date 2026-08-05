@@ -1,13 +1,16 @@
 """HTTP surface: the single-field UI, the benchmark page, and the JSON API."""
 from __future__ import annotations
 
+import json
 import os
+import queue
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import benchmark as bench
@@ -77,16 +80,20 @@ def _declared(advanced: AdvancedInput) -> Declared:
     )
 
 
-def _with_curl(result: dict, request: Request | None = None) -> dict:
+def _base_url(request: Request | None) -> str:
     """
     The curl printed on the result page has to be the one that actually works,
     so it is built from the host the caller reached us on unless an explicit
-    public URL is configured.
+    public URL is configured. Resolved eagerly, because the streaming endpoint
+    finishes its work on a worker thread after the request scope is gone.
     """
     base = os.environ.get("MRI_PUBLIC_URL", "").rstrip("/")
     if not base and request is not None:
         base = str(request.base_url).rstrip("/")
-    base = base or "http://localhost:8000"
+    return base or "http://localhost:8000"
+
+
+def _with_curl(result: dict, base: str) -> dict:
     result["api"] = {
         "url": f"{base}/api/v1/evaluate?domain={result['domain']}",
         "curl": f"curl -s '{base}/api/v1/evaluate?domain={result['domain']}' | jq",
@@ -102,7 +109,7 @@ def evaluate_post(payload: EvaluateRequest, request: Request):
                      use_cache=not payload.refresh)
     except InvalidDomain as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _with_curl(result, request)
+    return _with_curl(result, _base_url(request))
 
 
 @app.get("/api/v1/evaluate")
@@ -125,7 +132,85 @@ def evaluate_get(
         )
     except InvalidDomain as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _with_curl(result, request)
+    return _with_curl(result, _base_url(request))
+
+
+# ── Live evaluation stream ──────────────────────────────────────────────────
+def _sse(event: str, payload) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+@app.get("/api/v1/evaluate/stream")
+def evaluate_stream(
+    request: Request,
+    domain: str = Query(..., description="Domain or URL to underwrite"),
+    legal_name: str = "",
+    category: str = "",
+    country: str = "",
+    email: str = "",
+    refresh: bool = False,
+):
+    """
+    The same evaluation as GET /api/v1/evaluate, narrated as it happens.
+
+    Server-sent events. Every outbound call, every page fetched and every signal
+    scored arrives as a `trace` event the moment it is recorded; the finished
+    decision arrives once as `result`, or a `failed` event if the input was not a
+    domain. The event names avoid `open` and `error`, which EventSource already
+    dispatches for transport state. Work that has not finished emits a
+    `running` event first and a terminal event carrying the same `id` after, so
+    a consumer can show a line, then complete it in place.
+
+        curl -N 'http://localhost:8000/api/v1/evaluate/stream?domain=stripe.com'
+    """
+    declared = Declared(legal_name=legal_name, category=category,
+                        country=country.upper(), email=email)
+    # Read off the request before the generator starts: by the time the worker
+    # thread runs, the request scope may be gone.
+    base = _base_url(request)
+
+    def stream():
+        events: queue.Queue = queue.Queue()
+        SENTINEL = object()
+
+        def worker():
+            try:
+                result = run(domain, declared, use_cache=not refresh,
+                             sink=events.put)
+                events.put(("result", _with_curl(result, base)))
+            except InvalidDomain as exc:
+                events.put(("failed", {"detail": str(exc), "status": 400}))
+            except Exception as exc:
+                events.put(("failed", {"detail": f"{type(exc).__name__}: {exc}",
+                                       "status": 500}))
+            finally:
+                events.put(SENTINEL)
+
+        threading.Thread(target=worker, name=f"stream-{domain}", daemon=True).start()
+
+        yield _sse("start", {"domain": domain, "policy_version": POLICY_VERSION})
+        while True:
+            item = events.get()
+            if item is SENTINEL:
+                break
+            if isinstance(item, tuple):
+                yield _sse(item[0], item[1])
+            else:
+                yield _sse("trace", item)
+        yield _sse("done", {"ok": True})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            # nginx and most PaaS proxies buffer responses by default, which
+            # would hold every event until the run finished — exactly the thing
+            # this endpoint exists to avoid.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── Demos, policy, audit ────────────────────────────────────────────────────
