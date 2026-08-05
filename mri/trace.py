@@ -34,6 +34,7 @@ PHASES = {
     "signals": "Signals",
     "score": "Scoring",
     "decide": "Decision",
+    "narrate": "Summary",
     "persist": "Audit",
 }
 

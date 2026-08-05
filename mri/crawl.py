@@ -110,6 +110,9 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
         "root_html": "",
         "root_text": "",
         "title": "",
+        "description": "",
+        "site_name": "",
+        "headings": [],
         "word_count": 0,
         "pages": {},
         "pages_found": {},
@@ -119,6 +122,7 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
         "combined_text": "",
         "combined_html": "",
         "category_text": "",
+        "about_text": "",
         "emails": [],
         "crawl_truncated": False,
     }
@@ -136,6 +140,9 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
     bundle["root_html"] = html
     bundle["root_text"] = parsed["text"]
     bundle["title"] = parsed["title"]
+    bundle["description"] = parsed["description"]
+    bundle["site_name"] = parsed["site_name"]
+    bundle["headings"] = parsed["headings"]
     bundle["word_count"] = parsed["word_count"]
     trace.event("crawl", "Parsed the root page", "ok",
                 f"“{parsed['title'] or 'untitled'}” · {parsed['word_count']:,} words · "
@@ -201,6 +208,11 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
                                else " · boilerplate, withheld from category inference"))
                 fetched_texts.append(sub["text"])
                 fetched_html.append(result.get("body", ""))
+                # The about page is where a merchant explains itself in its own
+                # words. Kept whole for the summary; every other page is only
+                # ever read as scoring evidence.
+                if "about" in target["classes"] and len(sub["text"]) > len(bundle["about_text"]):
+                    bundle["about_text"] = sub["text"][:4000]
                 if not BOILERPLATE_CLASSES.intersection(target["classes"]):
                     offer_texts.append(sub["text"])
                 for cls in target["classes"]:

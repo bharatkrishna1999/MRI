@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass, field
 from . import geo as geoip
 from .crawl import crawl_site
 from .domains import InvalidDomain, normalize_domain
+from .narrative import summarise
 from .netcalls import Deadline, fetch_root, rdap_lookup, resolve_a, tls_info
 from .policy import (
     CATEGORY_DESCRIPTIONS,
@@ -330,6 +331,8 @@ def evaluate(domain_input: str, declared: Declared | None = None,
     decision = decide(scoring, codes, signals)
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
+    signal_dicts = [s.as_dict() for s in signals]
+
     for override in decision.get("overrides_applied", []) or []:
         trace.event("decide", "Policy override", "warn",
                     f"{override.get('code')} caps the outcome at "
@@ -340,7 +343,7 @@ def evaluate(domain_input: str, declared: Declared | None = None,
                 f"payout {decision['payout'] or '—'} · decided in {elapsed_ms} ms"
                 + (" · the global deadline expired mid-run" if deadline.expired() else ""))
 
-    return {
+    result = {
         "trace": trace.events,
         "domain": domain,
         "input": domain_input,
@@ -358,7 +361,7 @@ def evaluate(domain_input: str, declared: Declared | None = None,
             {"code": c, "description": REASON_CODES.get(c, "")} for c in codes
         ],
         "categories": _by_category(signals),
-        "signals": [s.as_dict() for s in signals],
+        "signals": signal_dicts,
         "unavailable": [
             {"key": s.key, "label": s.label, "weight": s.weight, "reason": s.reason}
             for s in signals if s.status != OK
@@ -376,6 +379,12 @@ def evaluate(domain_input: str, declared: Declared | None = None,
                 "root_url": (evidence.crawl or {}).get("root_url"),
                 "root_status": (evidence.crawl or {}).get("root_status"),
                 "title": (evidence.crawl or {}).get("title"),
+                # The merchant's own one-line description of itself, kept
+                # because it is the best sentence anyone will write about what
+                # this business is.
+                "description": (evidence.crawl or {}).get("description"),
+                "site_name": (evidence.crawl or {}).get("site_name"),
+                "headings": (evidence.crawl or {}).get("headings", [])[:6],
                 "word_count": (evidence.crawl or {}).get("word_count"),
                 "links_discovered": (evidence.crawl or {}).get("links_discovered"),
                 "links_fetched": (evidence.crawl or {}).get("links_fetched"),
@@ -387,3 +396,17 @@ def evaluate(domain_input: str, declared: Declared | None = None,
         "weights_total": TOTAL_WEIGHT,
         "signal_count": len(SIGNAL_SPEC),
     }
+
+    # Prose last, and strictly downstream of the verdict: it reads the finished
+    # decision and cannot reach back into it.
+    with trace.step("narrate", "Writing the plain-English summary",
+                    "what this business appears to be, and why this decision — "
+                    "no network call, no model") as step:
+        result["summary"] = summarise(domain, result["evidence"], signal_dicts, result)
+        step["detail"] = (f"{len(result['summary']['business']['paragraph'].split())} words on the "
+                          f"business, {len(result['summary']['why']['paragraphs'])} paragraphs on "
+                          f"the decision")
+
+    # Re-read: the snapshot above was taken before the summary was written.
+    result["trace"] = trace.events
+    return result

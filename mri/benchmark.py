@@ -101,7 +101,9 @@ def evaluate_all(rows: list[dict] | None = None, workers: int = 6,
     done = 0
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(run, row["domain"]): row for row in rows}
+        # narrate=False: the benchmark reads scores, not prose, and sixty model
+        # calls for paragraphs nobody opens is a free tier spent on nothing.
+        futures = {pool.submit(run, row["domain"], narrate=False): row for row in rows}
         for future in as_completed(futures):
             row = futures[future]
             record = {
