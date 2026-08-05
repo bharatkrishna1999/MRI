@@ -123,7 +123,12 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
         "crawl_truncated": False,
     }
 
+    trace = deadline.trace
+
     if not bundle["root_ok"]:
+        trace.event("crawl", "Crawl skipped", "error",
+                    f"the root did not serve a page ({bundle['root_error'] or bundle['root_status']}), "
+                    "so there is nothing to walk")
         return bundle
 
     html = root.get("body", "")
@@ -132,9 +137,15 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
     bundle["root_text"] = parsed["text"]
     bundle["title"] = parsed["title"]
     bundle["word_count"] = parsed["word_count"]
+    trace.event("crawl", "Parsed the root page", "ok",
+                f"“{parsed['title'] or 'untitled'}” · {parsed['word_count']:,} words · "
+                f"{len(parsed['anchors'])} anchors")
 
     links = internal_links(bundle["root_url"], domain, parsed["anchors"])
     bundle["links_discovered"] = len(links)
+    trace.event("crawl", "Link discovery", "ok",
+                f"{len(links)} unique internal links on {domain} after dropping assets, "
+                "mailto/tel and off-domain anchors")
 
     # A link found on the homepage is evidence the page exists even if we run
     # out of budget before fetching it. Record that separately from a fetch.
@@ -146,6 +157,13 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
     fetched_texts, fetched_html = [parsed["text"]], [html]
     # The homepage always describes the offering, so it always seeds this one.
     offer_texts = [parsed["text"]]
+
+    classed = [t for t in targets if t["classes"]]
+    trace.event("crawl", "Crawl queue", "ok",
+                f"{len(targets)} of {len(links)} links queued at depth 1, "
+                f"{CRAWL_WORKERS} workers, {PER_CALL_TIMEOUT_S}s each · "
+                f"{len(classed)} classified: "
+                + (", ".join(sorted({c for t in classed for c in t["classes"]})) or "none"))
 
     if targets and not deadline.expired():
         with ThreadPoolExecutor(max_workers=CRAWL_WORKERS) as pool:
@@ -168,12 +186,19 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
                     "error": result.get("error"),
                 }
                 bundle["crawled"].append(record)
+                tag = "/".join(target["classes"]) or "unclassified"
                 if not record["ok"]:
+                    trace.event("crawl", f"GET {target['url']}", "warn",
+                                f"{tag} · {record['error'] or 'HTTP ' + str(record['status'])}")
                     continue
 
                 bundle["links_fetched"] += 1
                 sub = parse_html(result.get("body", ""))
                 record["word_count"] = sub["word_count"]
+                trace.event("crawl", f"GET {target['url']}", "ok",
+                            f"{tag} · HTTP {record['status']} · {sub['word_count']:,} words"
+                            + ("" if not BOILERPLATE_CLASSES.intersection(target["classes"])
+                               else " · boilerplate, withheld from category inference"))
                 fetched_texts.append(sub["text"])
                 fetched_html.append(result.get("body", ""))
                 if not BOILERPLATE_CLASSES.intersection(target["classes"]):
@@ -190,6 +215,9 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
 
     if deadline.expired() and bundle["links_fetched"] < len(targets):
         bundle["crawl_truncated"] = True
+        trace.event("crawl", "Crawl truncated", "warn",
+                    f"the 8s budget ran out with {len(targets) - bundle['links_fetched']} "
+                    "queued pages unfetched")
 
     bundle["combined_text"] = " ".join(fetched_texts)[:400_000]
     bundle["combined_html"] = " ".join(fetched_html)[:1_200_000]
@@ -198,4 +226,9 @@ def crawl_site(domain: str, root: dict, deadline: Deadline) -> dict:
     from .netcalls import emails_in
 
     bundle["emails"] = emails_in(bundle["combined_text"])[:10]
+    trace.event("crawl", "Crawl complete", "ok",
+                f"{bundle['links_fetched']}/{len(targets)} pages fetched · "
+                f"{len(bundle['combined_text'].split()):,} words of evidence · "
+                f"policy pages found: {', '.join(sorted(bundle['pages'])) or 'none'} · "
+                f"{len(bundle['emails'])} contact email(s)")
     return bundle

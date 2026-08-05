@@ -31,8 +31,11 @@ def api_key() -> str:
 
 
 def _safe_browsing(domain: str, deadline: Deadline) -> dict:
+    trace = deadline.trace
     key = api_key()
     if not key:
+        trace.event("enrich", "Google Safe Browsing v4", "warn",
+                    "skipped — no SAFE_BROWSING_API_KEY in the environment")
         return {"ok": False, "error": "no SAFE_BROWSING_API_KEY configured"}
 
     budget = deadline.budget(PER_CALL_TIMEOUT_S)
@@ -53,41 +56,60 @@ def _safe_browsing(domain: str, deadline: Deadline) -> dict:
         },
     }
 
-    try:
-        import httpx
+    with trace.step("enrich", f"POST {SAFE_BROWSING_URL}",
+                    f"{len(THREAT_TYPES)} threat types over 3 URL forms") as step:
+        try:
+            import httpx
 
-        with httpx.Client(timeout=budget, headers=HEADERS) as client:
-            response = client.post(SAFE_BROWSING_URL, params={"key": key}, json=payload)
-        if response.status_code != 200:
-            return {"ok": False, "error": f"Safe Browsing HTTP {response.status_code}"}
-        matches = response.json().get("matches", [])
-        return {"ok": True, "source": "Google Safe Browsing v4",
-                "matches": matches, "listed": bool(matches)}
-    except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            with httpx.Client(timeout=budget, headers=HEADERS) as client:
+                response = client.post(SAFE_BROWSING_URL, params={"key": key}, json=payload)
+            if response.status_code != 200:
+                step["status"] = "error"
+                step["detail"] = f"HTTP {response.status_code}"
+                return {"ok": False, "error": f"Safe Browsing HTTP {response.status_code}"}
+            matches = response.json().get("matches", [])
+            step["status"] = "warn" if matches else "ok"
+            step["detail"] = (f"{len(matches)} threat match(es)" if matches
+                              else "HTTP 200 · no threat match")
+            return {"ok": True, "source": "Google Safe Browsing v4",
+                    "matches": matches, "listed": bool(matches)}
+        except Exception as exc:
+            step["status"] = "error"
+            step["detail"] = f"{type(exc).__name__}: {exc}"
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _spamhaus_dbl(domain: str, deadline: Deadline) -> dict:
     budget = deadline.budget(PER_CALL_TIMEOUT_S)
     if budget <= 0.1:
         return {"ok": False, "error": "deadline exhausted"}
-    try:
-        import dns.resolver
+    query = f"{domain}.dbl.spamhaus.org"
+    with deadline.trace.step("enrich", f"DNS A {query}",
+                             "keyless fallback — Spamhaus Domain Block List") as step:
+        try:
+            import dns.resolver
 
-        resolver = dns.resolver.Resolver()
-        resolver.lifetime = budget
-        resolver.timeout = budget
-        answers = [r.address for r in resolver.resolve(f"{domain}.dbl.spamhaus.org", "A")]
-    except Exception as exc:
-        name = type(exc).__name__
-        if name in ("NXDOMAIN", "NoAnswer"):
-            return {"ok": True, "source": "Spamhaus DBL", "listed": False, "codes": []}
-        return {"ok": False, "error": f"{name}: {exc}"}
+            resolver = dns.resolver.Resolver()
+            resolver.lifetime = budget
+            resolver.timeout = budget
+            answers = [r.address for r in resolver.resolve(query, "A")]
+        except Exception as exc:
+            name = type(exc).__name__
+            if name in ("NXDOMAIN", "NoAnswer"):
+                step["detail"] = "NXDOMAIN — not on the block list"
+                return {"ok": True, "source": "Spamhaus DBL", "listed": False, "codes": []}
+            step["status"], step["detail"] = "error", f"{name}: {exc}"
+            return {"ok": False, "error": f"{name}: {exc}"}
 
-    if any(a.startswith(DBL_ERROR_PREFIX) for a in answers):
-        return {"ok": False, "error": f"Spamhaus DBL refused the query ({answers[0]})"}
-    listed = [a for a in answers if a.startswith(DBL_LISTING_PREFIX)]
-    return {"ok": True, "source": "Spamhaus DBL", "listed": bool(listed), "codes": listed}
+        if any(a.startswith(DBL_ERROR_PREFIX) for a in answers):
+            step["status"] = "error"
+            step["detail"] = f"query refused ({answers[0]}) — over the free-use limit"
+            return {"ok": False, "error": f"Spamhaus DBL refused the query ({answers[0]})"}
+        listed = [a for a in answers if a.startswith(DBL_LISTING_PREFIX)]
+        step["status"] = "warn" if listed else "ok"
+        step["detail"] = (f"listed: {', '.join(listed)}" if listed
+                          else "answered, no listing code")
+        return {"ok": True, "source": "Spamhaus DBL", "listed": bool(listed), "codes": listed}
 
 
 def lookup(domain: str, deadline: Deadline) -> dict:

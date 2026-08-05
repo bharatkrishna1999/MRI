@@ -30,6 +30,12 @@ The engine then, inside an 8 second budget:
 5. returns a decision, a reserve percentage, a payout delay and machine reason
    codes.
 
+None of that happens behind a progress bar. Every outbound call, every page the
+crawler fetches and every signal it scores is printed to a live console as it
+happens — see **Watching a run** below. The pages are built for a phone first:
+one column, tap targets that clear 44px, and wide tables that scroll inside
+their own container rather than widening the page.
+
 ## The decision, not the score
 
 A number out of 100 is not a decision. These are:
@@ -95,6 +101,39 @@ Confidence is the share of the 100 policy weight points that could be computed.
 Below 60% the run is capped at manual review and carries `LOW_CONFIDENCE`.
 Every decision is cached for 24 hours, keyed by domain *and* policy version.
 
+## Watching a run
+
+Underwriting is a judgement about somebody's business, so the engine says what
+it did rather than asking to be trusted. Every run records an ordered trace —
+each HTTP request with its status, size and time to first byte, each redirect
+hop, the DNS answers, the TLS handshake and issuer, the RDAP parse, each page
+the crawler fetched and what class it was, the taxonomy inference with its
+lexicon hits, then all 24 signals with their arithmetic, the weighted score,
+any policy override and the audit write.
+
+The UI streams it over server-sent events and renders it as a terminal:
+
+```
+GET /api/v1/evaluate/stream?domain=example.com     text/event-stream
+```
+
+```
+curl -N 'http://localhost:8000/api/v1/evaluate/stream?domain=stripe.com'
+```
+
+Event names are `start`, `trace`, `result`, `failed`, `done` — deliberately not
+`open` or `error`, which `EventSource` already dispatches for transport state.
+Work that takes measurable time emits a `running` event first and a terminal
+event carrying the same `id` after, so a consumer completes the line in place
+instead of printing it twice.
+
+The same list ships as `trace` on the ordinary JSON response and is stored with
+the audit record, so a decision replayed months later still carries the calls
+that produced it. A cache hit is honest about being one: its own trace is two
+lines, and the run that actually made the calls is kept alongside as
+`trace_of_cached_run`. Tick **bypass the 24h cache** on the form to watch the
+whole thing happen live.
+
 ## Audit trail and API
 
 Every run is persisted to SQLite — inputs, every raw signal value, the weights
@@ -105,6 +144,7 @@ every response.
 ```
 GET  /api/v1/evaluate?domain=example.com      full structured decision
 POST /api/v1/evaluate                         {"domain": "...", "advanced": {...}}
+GET  /api/v1/evaluate/stream?domain=...       the same run, narrated over SSE
 GET  /api/v1/policy                           weights, bands, reason codes, taxonomy
 GET  /api/v1/audit/recent                     last N decisions
 GET  /api/v1/audit/{id}                       replay one decision
@@ -201,6 +241,7 @@ mri/policy.py          versioned weights, bands, reason codes — the whole poli
 mri/engine.py          orchestration, deadlines, confidence
 mri/decision.py        score -> reserve percentage and payout delay
 mri/crawl.py           anchor extraction and depth-1 link discovery
+mri/trace.py           the run trace behind the live console and the audit record
 mri/signals/           the seven categories
 mri/benchmark.py       labelled-set harness and metrics
 mri/store.py           SQLite audit trail and 24h cache

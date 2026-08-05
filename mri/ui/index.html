@@ -2,37 +2,46 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1220'/%3E%3Cpath d='M8 22V10l8 7 8-7v12' stroke='%231f5eff' stroke-width='3' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
 <title>Merchant Risk Intelligence</title>
 <style>
 :root{
   --bg:#f6f7f9; --panel:#fff; --ink:#0b1220; --muted:#5b6577; --line:#e4e8ee;
   --brand:#1f5eff; --good:#0f9d58; --warn:#e8a317; --bad:#d92d20; --hold:#7c5cff;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --gutter:24px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
 body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
-     background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+     background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;
+     overflow-x:hidden}
 a{color:var(--brand);text-decoration:none}
-.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+button{-webkit-tap-highlight-color:transparent}
+.wrap{max-width:1180px;margin:0 auto;
+      padding-left:max(var(--gutter),env(safe-area-inset-left));
+      padding-right:max(var(--gutter),env(safe-area-inset-right))}
 
 header{background:#0b1220;color:#fff;padding:14px 0}
-header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.brand{font-weight:700;letter-spacing:-.2px}
+header .wrap{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:-.2px;font-size:15px}
 .brand span{opacity:.55;font-weight:400}
-.hnav{display:flex;align-items:center;gap:18px;font-size:13px}
-.hnav a{color:#c8d2e4}
+.hnav{display:flex;align-items:center;gap:16px;font-size:13px;flex-wrap:wrap}
+.hnav a{color:#c8d2e4;padding:4px 0}
 .chip-policy{font-family:var(--mono);font-size:11px;background:#1b2740;color:#8fb0ff;
   padding:4px 9px;border-radius:5px;border:1px solid #2a3a5c}
 
-.hero{padding:38px 0 26px}
-.hero h1{font-size:30px;letter-spacing:-.6px;margin-bottom:6px}
+.hero{padding:34px 0 24px}
+.hero h1{font-size:clamp(23px,5.4vw,30px);letter-spacing:-.6px;margin-bottom:6px;text-wrap:balance}
 .hero p.sub{color:var(--muted);max-width:640px;margin-bottom:22px}
 
 .demos{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-.demo{background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px 14px;
+.demo{background:#fff;border:1px solid var(--line);border-radius:9px;padding:11px 14px;
   cursor:pointer;text-align:left;font:inherit;font-size:13px;transition:.12s;
-  flex:1 1 260px;max-width:none}
+  flex:1 1 260px;min-height:48px}
 .demo:hover{border-color:var(--brand);transform:translateY(-1px)}
 .demo b{display:block;font-size:13px;margin-bottom:2px}
 .demo small{color:var(--muted);font-size:11.5px;line-height:1.35;display:block}
@@ -40,60 +49,118 @@ header .wrap{display:flex;align-items:center;justify-content:space-between;gap:1
 .dot.clean{background:var(--good)}.dot.borderline{background:var(--warn)}.dot.decline{background:var(--bad)}
 .demo .ready{float:right;font-size:10px;color:var(--muted);font-family:var(--mono)}
 
-form.mainform{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;
+form.mainform{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;
   box-shadow:0 1px 2px rgba(16,24,40,.04)}
-.field{display:flex;gap:10px}
-.field input{flex:1;font:inherit;font-size:17px;padding:13px 15px;border:1px solid var(--line);
-  border-radius:9px;background:#fbfcfd}
+.field{display:flex;gap:10px;flex-wrap:wrap}
+.field input{flex:1 1 220px;min-width:0;font:inherit;font-size:17px;padding:13px 15px;
+  border:1px solid var(--line);border-radius:9px;background:#fbfcfd}
 .field input:focus{outline:none;border-color:var(--brand);background:#fff;
   box-shadow:0 0 0 3px rgba(31,94,255,.12)}
 .field button{font:inherit;font-weight:600;background:var(--brand);color:#fff;border:0;
-  border-radius:9px;padding:0 26px;cursor:pointer;font-size:15px}
+  border-radius:9px;padding:0 26px;cursor:pointer;font-size:15px;min-height:50px;flex:0 0 auto}
 .field button:disabled{background:#9db4e8;cursor:progress}
-.hint{color:var(--muted);font-size:12.5px;margin-top:9px}
+.hintrow{display:flex;justify-content:space-between;align-items:center;gap:12px;
+  flex-wrap:wrap;margin-top:10px}
+.hint{color:var(--muted);font-size:12.5px}
+.live{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);
+  cursor:pointer;user-select:none;min-height:32px}
+.live input{width:16px;height:16px;accent-color:var(--brand)}
 .err{color:var(--bad);font-size:13px;margin-top:9px;display:none}
 
 details.adv{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
-details.adv summary{cursor:pointer;font-size:13px;color:var(--muted);font-weight:500;list-style:none}
+details.adv summary{cursor:pointer;font-size:13px;color:var(--muted);font-weight:500;
+  list-style:none;padding:4px 0}
 details.adv summary::-webkit-details-marker{display:none}
 details.adv summary:before{content:"▸";display:inline-block;margin-right:7px;transition:.15s}
 details.adv[open] summary:before{transform:rotate(90deg)}
 .advgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:14px}
 .advgrid label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:4px;font-weight:500}
-.advgrid input,.advgrid select{width:100%;font:inherit;font-size:13.5px;padding:8px 10px;
+.advgrid input,.advgrid select{width:100%;font:inherit;font-size:16px;padding:9px 10px;
   border:1px solid var(--line);border-radius:7px;background:#fbfcfd}
 .advnote{grid-column:1/-1;font-size:11.5px;color:var(--muted);line-height:1.5}
 
-#progress{display:none;margin-top:22px;background:#fff;border:1px solid var(--line);
-  border-radius:12px;padding:22px}
-.pbar{height:4px;background:#eef1f6;border-radius:2px;overflow:hidden;margin-top:12px}
-.pbar i{display:block;height:100%;background:var(--brand);width:8%;animation:crawl 7.5s linear forwards}
-@keyframes crawl{to{width:97%}}
-.psteps{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:12px;line-height:1.9}
+/* ── Live console ─────────────────────────────────────────────────────────── */
+.console{background:#0b1220;border-radius:12px;overflow:hidden;margin-top:20px;
+  border:1px solid #1b2740}
+#progress{display:none}
+.chead{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:12px 14px;border-bottom:1px solid #1b2740;flex-wrap:wrap}
+.chead .ctitle{color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;gap:9px;
+  min-width:0}
+.chead .ctitle .dom{font-family:var(--mono);opacity:.7;font-weight:400;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.chead .cmeta{font-family:var(--mono);font-size:11px;color:#8fb0ff;display:flex;gap:12px;
+  flex-wrap:wrap}
+.spin{width:9px;height:9px;border-radius:50%;background:#8fb0ff;flex:0 0 auto;
+  animation:pulse 1.05s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}
+.spin.stop{animation:none;background:var(--good)}
+.spin.fail{animation:none;background:var(--bad)}
+
+.clog{font-family:var(--mono);font-size:11.5px;line-height:1.5;max-height:340px;
+  overflow-y:auto;overflow-x:hidden;padding:8px 0;scroll-behavior:smooth;
+  overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.clog.full{max-height:min(60vh,460px)}
+.cline{display:grid;grid-template-columns:46px 12px 1fr;gap:9px;padding:3px 14px;
+  align-items:baseline;animation:slidein .18s ease-out}
+@keyframes slidein{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.cline .t{color:#4c5c7a;text-align:right;font-size:10.5px;font-variant-numeric:tabular-nums}
+.cline .g{font-size:10px;line-height:1.6}
+.cline .body{min-width:0}
+.cline .lab{color:#dbe4f5;word-break:break-word}
+.cline .det{color:#7f8ca6;display:block;word-break:break-word}
+.cline .ms{color:#4c5c7a;font-size:10.5px;margin-left:6px}
+.cline .ph{display:inline-block;font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;
+  color:#5a6b8c;margin-right:7px;vertical-align:1px}
+.cline.s-ok .g{color:var(--good)} .cline.s-ok .g:before{content:"●"}
+.cline.s-info .g{color:#4c5c7a} .cline.s-info .g:before{content:"○"}
+.cline.s-warn .g{color:var(--warn)} .cline.s-warn .g:before{content:"▲"}
+.cline.s-error .g{color:var(--bad)} .cline.s-error .g:before{content:"✕"}
+.cline.s-running .g{color:#8fb0ff} .cline.s-running .g:before{content:"◐";
+  display:inline-block;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.cline.s-running .lab{color:#8fb0ff}
+.cdiv{font-family:var(--mono);font-size:10px;color:#5a6b8c;text-transform:uppercase;
+  letter-spacing:.6px;padding:10px 14px 6px;margin-top:6px;border-top:1px solid #1b2740}
+.cfoot{border-top:1px solid #1b2740;padding:9px 14px;display:flex;gap:14px;flex-wrap:wrap;
+  font-family:var(--mono);font-size:10.5px;color:#5a6b8c}
+.cfoot button{background:none;border:0;color:#8fb0ff;font:inherit;cursor:pointer;padding:2px 0}
+.phasebar{display:flex;gap:4px;padding:0 14px 10px;flex-wrap:wrap}
+.pchip{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;
+  color:#4c5c7a;border:1px solid #1b2740;border-radius:4px;padding:2px 6px;transition:.2s}
+.pchip.on{color:#0b1220;background:#8fb0ff;border-color:#8fb0ff}
+.pchip.done{color:#9fb0cc;border-color:#2a3a5c;background:#141f36}
 
 #result{display:none;padding-bottom:60px}
-.verdict{border-radius:14px;padding:24px;color:#fff;margin-bottom:16px}
+.verdict{border-radius:14px;padding:20px;color:#fff;margin-bottom:16px}
 .verdict.auto_approve{background:linear-gradient(120deg,#0f9d58,#0b7a44)}
 .verdict.approve_with_reserve{background:linear-gradient(120deg,#e8a317,#c07c05)}
 .verdict.manual_review{background:linear-gradient(120deg,#7c5cff,#5a3fd6)}
 .verdict.decline{background:linear-gradient(120deg,#d92d20,#a51b10)}
-.verdict .vtop{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap}
-.verdict h2{font-size:27px;letter-spacing:-.5px}
-.verdict .dom{font-family:var(--mono);font-size:13px;opacity:.85;margin-bottom:8px}
+.verdict .vtop{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.verdict h2{font-size:clamp(21px,5.2vw,27px);letter-spacing:-.5px}
+.verdict .dom{font-family:var(--mono);font-size:12.5px;opacity:.85;margin-bottom:8px;
+  word-break:break-all}
 .verdict .scorebox{text-align:right}
-.verdict .scorebox b{font-size:44px;line-height:1;letter-spacing:-1.5px;display:block}
+.verdict .scorebox b{font-size:clamp(34px,10vw,44px);line-height:1;letter-spacing:-1.5px;display:block}
 .verdict .scorebox span{font-size:11.5px;opacity:.85;text-transform:uppercase;letter-spacing:.6px}
-.terms{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+.terms{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:1px;
   background:rgba(255,255,255,.25);border-radius:9px;overflow:hidden;margin-top:20px}
 .terms div{background:rgba(0,0,0,.16);padding:12px 14px}
 .terms dt{font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;opacity:.8;margin-bottom:3px}
-.terms dd{font-size:17px;font-weight:600}
+.terms dd{font-size:16px;font-weight:600}
 .rationale{margin-top:18px;font-size:13.5px;line-height:1.6;opacity:.95;max-width:900px}
 
 .grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start}
-@media(max-width:900px){.grid2{grid-template-columns:1fr}}
-.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+/* Grid and flex children default to min-width:auto, so the 560px-wide
+   breakdown table would widen the page itself rather than scroll inside its
+   own wrapper. This is the fix for that, and it has to be on every ancestor. */
+.grid2>div{min-width:0}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;
+  margin-bottom:16px;min-width:0}
 .card h3{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:14px}
+.card.dark{background:#0b1220;border-color:#1b2740;padding:0;overflow:hidden}
+.card.dark .console{margin:0;border:0;border-radius:0}
 
 ul.actions{list-style:none;font-size:13.5px}
 ul.actions li{padding:9px 0 9px 22px;border-bottom:1px solid var(--line);position:relative;line-height:1.5}
@@ -111,10 +178,11 @@ ul.docs li:before{content:"▢";position:absolute;left:0;color:var(--muted)}
 
 .confwrap{margin-bottom:6px}
 .confbar{height:8px;background:#eef1f6;border-radius:4px;overflow:hidden}
-.confbar i{display:block;height:100%;background:var(--brand)}
-.confmeta{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:6px}
+.confbar i{display:block;height:100%;background:var(--brand);transition:width .4s ease}
+.confmeta{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:6px;gap:8px}
 
-table.bd{width:100%;border-collapse:collapse;font-size:13px}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
+table.bd{width:100%;min-width:560px;border-collapse:collapse;font-size:13px}
 table.bd th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;
   color:var(--muted);padding:0 8px 9px;border-bottom:1px solid var(--line);font-weight:600}
 table.bd th.n,table.bd td.n{text-align:right}
@@ -139,19 +207,48 @@ tr.sig .why{color:var(--muted);font-size:12px;line-height:1.5;padding-top:3px}
 .kv{font-size:12.5px}
 .kv div{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid #f1f3f7}
 .kv div:last-child{border:0}
-.kv dt{color:var(--muted)}
+.kv dt{color:var(--muted);flex:0 0 auto}
 .kv dd{font-family:var(--mono);font-size:11.5px;text-align:right;word-break:break-all;max-width:62%}
 
 pre.curl{background:#0b1220;color:#c9f7d5;font-family:var(--mono);font-size:11.5px;padding:12px 14px;
   border-radius:8px;overflow-x:auto;line-height:1.6}
 pre.curl b{color:#8fb0ff;font-weight:400}
-.copy{float:right;font-size:11px;background:#1b2740;color:#8fb0ff;border:0;padding:3px 8px;
+.copy{float:right;font-size:11px;background:#1b2740;color:#8fb0ff;border:0;padding:5px 10px;
   border-radius:4px;cursor:pointer;font-family:var(--mono)}
 
-footer{border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);font-size:12px;line-height:1.7}
+footer{border-top:1px solid var(--line);padding:22px 0 max(40px,env(safe-area-inset-bottom));
+  color:var(--muted);font-size:12px;line-height:1.7}
 .badgerow{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
 .tag{font-family:var(--mono);font-size:10.5px;background:#eef1f6;color:var(--muted);
   padding:3px 7px;border-radius:4px}
+
+/* ── Narrow screens ───────────────────────────────────────────────────────── */
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+@media(max-width:640px){
+  :root{--gutter:16px}
+  body{font-size:14.5px}
+  .hero{padding:24px 0 18px}
+  .hero p.sub{margin-bottom:18px}
+  .demos{gap:8px}
+  .demo{flex:1 1 100%}
+  .field button{flex:1 1 100%;padding:14px 20px}
+  .card{padding:15px}
+  .verdict{padding:17px}
+  .verdict .vtop{gap:10px}
+  .verdict .scorebox{text-align:left}
+  .terms{grid-template-columns:1fr 1fr}
+  .clog{max-height:min(52vh,300px);font-size:11px}
+  .cline{grid-template-columns:40px 12px 1fr;gap:7px;padding:3px 12px}
+  .cline .ph{display:none}
+  .kv div{flex-direction:column;gap:2px}
+  .kv dd{text-align:left;max-width:100%}
+  pre.curl{white-space:pre-wrap;word-break:break-all}
+  .copy{float:none;display:block;margin-bottom:10px}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important;scroll-behavior:auto!important}
+}
 </style>
 </head>
 <body>
@@ -168,26 +265,30 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);f
 <div class="wrap hero">
   <h1>Underwrite a merchant from one field.</h1>
   <p class="sub">Paste a domain. The engine crawls the storefront, reads the registration record, places the
-  merchant in the acceptance taxonomy from its own content, and returns a reserve percentage and a payout delay.</p>
+  merchant in the acceptance taxonomy from its own content, and returns a reserve percentage and a payout delay.
+  Every call it makes is printed as it happens.</p>
 
   <div class="demos" id="demos"></div>
 
   <form class="mainform" id="form" autocomplete="off">
     <div class="field">
-      <input id="domain" placeholder="example.com  or  https://www.example.com/pricing"
-             spellcheck="false" autofocus>
+      <input id="domain" placeholder="example.com" spellcheck="false"
+             autocapitalize="off" autocorrect="off" inputmode="url" enterkeyhint="go">
       <button type="submit" id="go">Underwrite</button>
     </div>
-    <div class="hint">Press enter. Nothing else is required.</div>
+    <div class="hintrow">
+      <span class="hint">Press enter. Nothing else is required.</span>
+      <label class="live"><input type="checkbox" id="fresh"> Bypass the 24h cache — make every call live</label>
+    </div>
     <div class="err" id="err"></div>
 
     <details class="adv" id="adv">
       <summary>Advanced — optional context, prefilled from enrichment</summary>
       <div class="advgrid">
-        <div><label>Declared legal name</label><input id="a_legal" placeholder="Acme Software Inc"></div>
-        <div><label>Declared category</label><select id="a_category"><option value="">— none —</option></select></div>
-        <div><label>Declared country</label><input id="a_country" placeholder="US" maxlength="2"></div>
-        <div><label>Contact email</label><input id="a_email" placeholder="billing@example.com"></div>
+        <div><label for="a_legal">Declared legal name</label><input id="a_legal" placeholder="Acme Software Inc"></div>
+        <div><label for="a_category">Declared category</label><select id="a_category"><option value="">— none —</option></select></div>
+        <div><label for="a_country">Declared country</label><input id="a_country" placeholder="US" maxlength="2" autocapitalize="characters"></div>
+        <div><label for="a_email">Contact email</label><input id="a_email" placeholder="billing@example.com" inputmode="email"></div>
         <p class="advnote">None of these change a score on their own. The declared category is compared against the
         category inferred from the site's own content to produce a mismatch flag — self-declaration is what a
         fraudulent applicant controls, so it is never scored directly. After a run these fields are filled with
@@ -197,12 +298,18 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);f
   </form>
 
   <div id="progress">
-    <b id="pdom">Evaluating…</b>
-    <div class="pbar"><i></i></div>
-    <div class="psteps">
-      RDAP registration record · DNS A record → GeoLite2 country · TLS certificate<br>
-      root fetch → anchor extraction → up to 15 internal links at depth 1, 3s each<br>
-      24 signals · 7 categories · 100 weight points · 8 second global budget
+    <div class="console">
+      <div class="chead">
+        <div class="ctitle"><span class="spin" id="spin"></span>
+          <span>Underwriting</span><span class="dom" id="pdom"></span></div>
+        <div class="cmeta"><span id="celapsed">0.0s</span><span id="ccount">0 events</span></div>
+      </div>
+      <div class="phasebar" id="phasebar"></div>
+      <div class="clog" id="clog"></div>
+      <div class="cfoot">
+        <span id="cnote">every outbound call, page fetch and scored signal, as it happens</span>
+        <button type="button" id="cauto">pause auto-scroll</button>
+      </div>
     </div>
   </div>
 </div>
@@ -221,17 +328,32 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;color:var(--muted);f
     <p class="rationale" id="v_rationale"></p>
   </div>
 
+  <div class="card dark" id="tracecard" style="display:none">
+    <div class="console">
+      <div class="chead">
+        <div class="ctitle"><span class="spin stop"></span><span>What the engine did</span>
+          <span class="dom" id="t_dom"></span></div>
+        <div class="cmeta"><span id="t_meta"></span></div>
+      </div>
+      <div class="clog full" id="tlog"></div>
+      <div class="cfoot"><span>Replayable: the same list ships in the JSON as <code>trace</code>, and is
+        stored with the audit record.</span></div>
+    </div>
+  </div>
+
   <div class="grid2">
     <div>
       <div class="card">
         <h3>Score breakdown — every signal, every point</h3>
-        <table class="bd">
-          <thead><tr>
-            <th>Category / signal</th><th>Raw value</th>
-            <th class="n">0–100</th><th class="n">Weight</th><th class="n">Contribution</th><th style="width:80px"></th>
-          </tr></thead>
-          <tbody id="bd"></tbody>
-        </table>
+        <div class="tablewrap">
+          <table class="bd">
+            <thead><tr>
+              <th>Category / signal</th><th>Raw value</th>
+              <th class="n">0–100</th><th class="n">Weight</th><th class="n">Contribution</th><th style="width:80px"></th>
+            </tr></thead>
+            <tbody id="bd"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card">
@@ -325,35 +447,187 @@ function esc(s){return (s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;
 
 $("form").addEventListener("submit", e=>{ e.preventDefault(); go($("domain").value); });
 
+// ── The live console ─────────────────────────────────────────────────────
+// Long-running work arrives twice: once as `running`, once with `ref` pointing
+// back at it. The second replaces the first in place, so the log reads like a
+// terminal rather than doubling every line.
+const PHASES = ["input","cache","enrich","crawl","infer","signals","score","decide","persist"];
+const CONSOLE = {lines:new Map(), count:0, autoscroll:true, timer:null, started:0, seen:new Set()};
+
+function consoleReset(domain){
+  CONSOLE.lines.clear(); CONSOLE.seen.clear();
+  CONSOLE.count = 0; CONSOLE.autoscroll = true; CONSOLE.started = Date.now();
+  $("clog").innerHTML = ""; $("pdom").textContent = domain;
+  $("ccount").textContent = "0 events"; $("celapsed").textContent = "0.0s";
+  $("cauto").textContent = "pause auto-scroll";
+  $("spin").className = "spin";
+  $("cnote").textContent = "every outbound call, page fetch and scored signal, as it happens";
+  $("phasebar").innerHTML = PHASES.map(p=>`<span class="pchip" id="ph_${p}">${p}</span>`).join("");
+  clearInterval(CONSOLE.timer);
+  CONSOLE.timer = setInterval(()=>{
+    $("celapsed").textContent = ((Date.now()-CONSOLE.started)/1000).toFixed(1)+"s";
+  }, 100);
+}
+
+function consoleStop(ok, note){
+  clearInterval(CONSOLE.timer);
+  $("spin").className = "spin " + (ok ? "stop" : "fail");
+  $("celapsed").textContent = ((Date.now()-CONSOLE.started)/1000).toFixed(1)+"s";
+  if(note) $("cnote").textContent = note;
+  // The phase that was in flight when the run ended is finished, not idle —
+  // leave every phase that ran marked as such.
+  PHASES.forEach(p=>{ const el=$("ph_"+p); if(el) el.className = CONSOLE.seen.has(p) ? "pchip done" : "pchip"; });
+}
+
+function steps(n){ return n + (n===1 ? " step" : " steps"); }
+
+function lineHtml(ev){
+  const ms = ev.ms != null ? `<span class="ms">${ev.ms} ms</span>` : "";
+  return `<span class="t">${(ev.t_ms/1000).toFixed(1)}s</span><span class="g"></span>`
+    + `<span class="body"><span class="lab"><span class="ph">${esc(ev.phase)}</span>${esc(ev.label)}</span>${ms}`
+    + (ev.detail ? `<span class="det">${esc(ev.detail)}</span>` : "") + `</span>`;
+}
+
+function pushEvent(ev, logId){
+  const log = $(logId || "clog");
+  const key = ev.ref || ev.id;
+  let row = CONSOLE.lines.get(key);
+  if(!row || !log.contains(row)){
+    row = document.createElement("div");
+    log.appendChild(row);
+    CONSOLE.lines.set(key, row);
+    CONSOLE.count++;
+  }
+  row.className = "cline s-" + (ev.status || "info");
+  row.innerHTML = lineHtml(ev);
+
+  $("ccount").textContent = CONSOLE.count + (CONSOLE.count===1?" event":" events");
+  if(ev.phase && !CONSOLE.seen.has(ev.phase)){
+    CONSOLE.seen.add(ev.phase);
+    PHASES.forEach(p=>{ const el=$("ph_"+p); if(!el) return;
+      if(p===ev.phase) el.className="pchip on";
+      else if(CONSOLE.seen.has(p)) el.className="pchip done"; });
+  }
+  if(CONSOLE.autoscroll) log.scrollTop = log.scrollHeight;
+}
+
+$("cauto").addEventListener("click", ()=>{
+  CONSOLE.autoscroll = !CONSOLE.autoscroll;
+  $("cauto").textContent = CONSOLE.autoscroll ? "pause auto-scroll" : "resume auto-scroll";
+  if(CONSOLE.autoscroll) $("clog").scrollTop = $("clog").scrollHeight;
+});
+// Scrolling up by hand means you want to read something. Stop fighting it.
+["wheel","touchmove"].forEach(evt=>$("clog").addEventListener(evt, ()=>{
+  const el = $("clog");
+  if(el.scrollTop + el.clientHeight < el.scrollHeight - 24){
+    CONSOLE.autoscroll = false; $("cauto").textContent = "resume auto-scroll";
+  }
+}, {passive:true}));
+
+// ── Running an evaluation ────────────────────────────────────────────────
+let STREAM = null;
+
+function query(domain){
+  const p = new URLSearchParams({domain: domain});
+  if($("a_legal").value.trim()) p.set("legal_name", $("a_legal").value.trim());
+  if($("a_category").value) p.set("category", $("a_category").value);
+  if($("a_country").value.trim()) p.set("country", $("a_country").value.trim());
+  if($("a_email").value.trim()) p.set("email", $("a_email").value.trim());
+  if($("fresh").checked) p.set("refresh", "true");
+  return p;
+}
+
 function go(domain){
   if(!domain || !domain.trim()) return;
+  domain = domain.trim();
   $("domain").value = domain;
-  $("err").style.display="none";
-  $("result").style.display="none";
-  $("progress").style.display="block";
-  $("pdom").textContent = "Evaluating " + domain.trim();
+  $("err").style.display = "none";
+  $("result").style.display = "none";
+  $("progress").style.display = "block";
   $("go").disabled = true;
-  window.scrollTo({top:0,behavior:"smooth"});
+  consoleReset(domain);
+  // The console sits below the form, which on a phone is below the fold. Scroll
+  // it into view rather than to the top, or the run happens off-screen.
+  $("progress").scrollIntoView({behavior:"smooth", block:"center"});
 
-  fetch("/api/v1/evaluate", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({
-      domain: domain.trim(),
-      advanced:{
-        legal_name:$("a_legal").value.trim(), category:$("a_category").value,
-        country:$("a_country").value.trim(), email:$("a_email").value.trim()
-      }
+  if(STREAM){ STREAM.close(); STREAM = null; }
+  if(!window.EventSource){ return fallback(domain); }
+
+  let gotAnything = false, finished = false;
+  const es = new EventSource("/api/v1/evaluate/stream?" + query(domain).toString());
+  STREAM = es;
+
+  es.addEventListener("start", ()=>{ gotAnything = true; });
+  es.addEventListener("trace", e=>{ gotAnything = true; pushEvent(JSON.parse(e.data)); });
+  es.addEventListener("result", e=>{
+    finished = true; gotAnything = true;
+    const m = JSON.parse(e.data);
+    consoleStop(true, `${steps(CONSOLE.count)} · ${m.cached ? "served from cache" : m.elapsed_ms+" ms"}`);
+    render(m);
+  });
+  // Named `failed`, not `error`: EventSource dispatches its own `error` for
+  // transport trouble, and the two must not be confused for one another.
+  es.addEventListener("failed", e=>{
+    finished = true;
+    let msg = "The evaluation failed.";
+    try { msg = JSON.parse(e.data).detail || msg; } catch(_) {}
+    es.close(); STREAM = null;
+    fail(msg);
+  });
+  es.addEventListener("done", ()=>{ es.close(); STREAM = null; $("go").disabled = false; });
+  // Transport-level failure. EventSource retries on its own, which would re-run
+  // the whole evaluation, so close it and fall back to the plain JSON call.
+  es.onerror = ()=>{
+    es.close(); STREAM = null;
+    if(finished){ $("go").disabled = false; return; }
+    if(!gotAnything){ fallback(domain); }
+    else { fail("The live stream dropped mid-run."); }
+  };
+}
+
+// Streaming unavailable — a proxy that buffers SSE, or a browser without it.
+// The decision still arrives, and it still carries the full trace.
+function fallback(domain){
+  pushEvent({id:-1, t_ms:0, phase:"input", label:"Streaming unavailable",
+             status:"warn", detail:"falling back to the plain JSON call — the same trace arrives at the end"});
+  fetch("/api/v1/evaluate?" + query(domain).toString())
+    .then(async r=>{ const j = await r.json(); if(!r.ok) throw new Error(j.detail||("HTTP "+r.status)); return j; })
+    .then(m=>{
+      (m.trace||[]).filter(ev=>ev.status!=="running").forEach(ev=>pushEvent(ev));
+      consoleStop(true, `${steps(CONSOLE.count)} · ${m.cached ? "served from cache" : m.elapsed_ms+" ms"}`);
+      render(m);
+      $("go").disabled = false;
     })
-  })
-  .then(async r=>{ const j = await r.json(); if(!r.ok) throw new Error(j.detail||("HTTP "+r.status)); return j; })
-  .then(render)
-  .catch(e=>{ $("err").textContent = e.message; $("err").style.display="block"; })
-  .finally(()=>{ $("progress").style.display="none"; $("go").disabled=false; });
+    .catch(e=>fail(e.message));
+}
+
+function fail(message){
+  consoleStop(false, message);
+  $("err").textContent = message;
+  $("err").style.display = "block";
+  $("go").disabled = false;
 }
 
 function render(m){
   LAST = m;
-  $("result").style.display="block";
+  $("result").style.display = "block";
+
+  // The whole log, kept with the decision. A cache hit has two of them — what
+  // this request did, and what the run that actually produced the decision did.
+  // They are separate timelines and are shown as such rather than interleaved.
+  const rows = list => list.filter(e=>e.status!=="running")
+    .map(ev=>`<div class="cline s-${ev.status||"info"}">${lineHtml(ev)}</div>`).join("");
+  const own = (m.trace||[]).filter(e=>e.status!=="running");
+  const prior = (m.trace_of_cached_run||[]).filter(e=>e.status!=="running");
+  $("tracecard").style.display = (own.length + prior.length) ? "block" : "none";
+  if(own.length + prior.length){
+    $("t_dom").textContent = m.domain;
+    $("t_meta").textContent = steps(own.length + prior.length)
+      + (m.cached ? ` · cache hit` : ` · ${m.elapsed_ms} ms`);
+    $("tlog").innerHTML = rows(own) + (prior.length
+      ? `<div class="cdiv">the run that produced this decision — ${esc(m.cached_at||"earlier")}, ${steps(prior.length)}</div>` + rows(prior)
+      : "");
+  }
 
   $("verdict").className = "verdict " + m.band;
   $("v_domain").textContent = m.domain + (m.cached ? `  · cached ${m.cache_age_s}s ago` : `  · ${m.elapsed_ms} ms`);

@@ -138,6 +138,62 @@ class TestCleanMerchant(unittest.TestCase):
         return next(s for s in self.result["signals"] if s["key"] == key)
 
 
+class TestTrace(unittest.TestCase):
+    """
+    The run narrates itself. This is what the live console renders and what the
+    audit record keeps, so it has to be complete, ordered, and honest about
+    which parts of the run failed.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = run_against("goodsaas.com", fixtures.GOOD_SITE)
+        cls.trace = cls.result["trace"]
+
+    def test_events_are_ordered_and_monotonic(self):
+        ids = [event["id"] for event in self.trace]
+        self.assertEqual(ids, sorted(ids))
+        self.assertEqual(ids, list(range(1, len(ids) + 1)))
+        offsets = [event["t_ms"] for event in self.trace]
+        self.assertEqual(offsets, sorted(offsets))
+
+    def test_every_page_the_crawler_fetched_is_named(self):
+        crawled = [e for e in self.trace
+                   if e["phase"] == "crawl" and e["label"].startswith("GET ")]
+        fetched = self.result["evidence"]["crawl"]["links_fetched"]
+        self.assertEqual(len(crawled), len(self.result["evidence"]["crawl"]["crawled"]))
+        self.assertGreaterEqual(len(crawled), fetched)
+        # The refund page is the heaviest single signal; it is named explicitly.
+        self.assertTrue(any("refund" in (e["detail"] or "") for e in crawled), crawled)
+
+    def test_every_signal_reports_its_arithmetic(self):
+        scored = {e["signal"]: e for e in self.trace if e.get("signal")}
+        self.assertEqual(set(scored), set(policy.SIGNAL_SPEC))
+        for signal in self.result["signals"]:
+            event = scored[signal["key"]]
+            if signal["status"] == "ok":
+                self.assertEqual(event["status"], "ok")
+                self.assertIn(str(signal["weight"]), event["detail"])
+            else:
+                self.assertEqual(event["status"], "warn")
+                self.assertIn("unavailable", event["detail"])
+
+    def test_the_decision_is_the_last_thing_that_happens(self):
+        phases = [e["phase"] for e in self.trace]
+        self.assertLess(phases.index("enrich"), phases.index("signals"))
+        self.assertLess(phases.index("signals"), phases.index("score"))
+        self.assertLess(phases.index("score"), phases.index("decide"))
+        self.assertEqual(phases[-1], "decide")
+
+    def test_a_failing_upstream_is_recorded_rather_than_hidden(self):
+        result = run_against("goodsaas.com", fixtures.GOOD_SITE,
+                             reputation={"ok": False, "error": "feed down"})
+        bad = [e for e in result["trace"]
+               if e["status"] == "warn" and e.get("signal") == "safe_browsing"]
+        self.assertEqual(len(bad), 1)
+        self.assertIn("unavailable", bad[0]["detail"])
+
+
 class TestShellSite(unittest.TestCase):
     def setUp(self):
         self.result = run_against(

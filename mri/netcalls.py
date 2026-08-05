@@ -17,6 +17,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from .policy import PER_CALL_TIMEOUT_S
+from .trace import Trace, fmt_bytes
 
 UA = "MerchantRiskIntelligence/1.0 (+underwriting-bot)"
 HEADERS = {
@@ -29,11 +30,20 @@ MAX_BODY_BYTES = 1_500_000
 
 
 class Deadline:
-    """A wall-clock budget shared by every call inside one evaluation."""
+    """
+    A wall-clock budget shared by every call inside one evaluation.
 
-    def __init__(self, seconds: float):
+    It also carries the run's Trace. The deadline is already threaded through
+    every outbound call in the engine, so hanging the recorder off it means the
+    network layer can narrate itself without a second parameter on twelve
+    signatures — and without a thread-local, which would not survive the two
+    thread pools the engine fans out across.
+    """
+
+    def __init__(self, seconds: float, trace: Trace | None = None):
         self.expires_at = time.monotonic() + seconds
         self.total = seconds
+        self.trace = trace or Trace()
 
     def remaining(self) -> float:
         return max(0.0, self.expires_at - time.monotonic())
@@ -138,26 +148,48 @@ def parse_html(html: str) -> dict:
 
 
 # ── HTTP ────────────────────────────────────────────────────────────────────
-def fetch(url: str, deadline: Deadline, timeout: float = PER_CALL_TIMEOUT_S) -> dict:
+def fetch(url: str, deadline: Deadline, timeout: float = PER_CALL_TIMEOUT_S,
+          purpose: str | None = None) -> dict:
     """
     GET a URL. Returns status, body, ttfb, final url, and a coarse `error_kind`
     that distinguishes 'the site is dead' from 'our fetch broke'.
+
+    Pass `purpose` to have the call narrate itself into the run trace. Callers
+    that already record a richer event of their own — the crawler names the page
+    class it is after — leave it unset so the console shows one line per fetch.
     """
     started = time.monotonic()
     target = url
+    trace = deadline.trace
+    span = trace.event(
+        "enrich" if purpose != "crawl" else "crawl",
+        f"GET {url}", "running", purpose or "",
+    ) if purpose else None
+
+    def done(result: dict, status: str, detail: str) -> dict:
+        if span:
+            trace.event(span["phase"], span["label"], status, detail,
+                        ref=span["id"], ms=int((time.monotonic() - started) * 1000))
+        return result
+
     try:
         for _ in range(MAX_REDIRECTS + 1):
             # Re-budgeted every hop, so a redirect chain cannot outlive the
             # evaluation's deadline no matter how long it is.
             budget = deadline.budget(timeout)
             if budget <= 0.1:
-                return {"ok": False, "error": "deadline exhausted", "error_kind": "timeout"}
+                return done({"ok": False, "error": "deadline exhausted", "error_kind": "timeout"},
+                            "error", "deadline exhausted before the request was sent")
 
             with _client(budget) as client:
                 with client.stream("GET", target) as resp:
                     location = resp.headers.get("location")
                     if resp.is_redirect and location:
-                        target = str(resp.url.join(location))
+                        hop = str(resp.url.join(location))
+                        if span:
+                            trace.event(span["phase"], f"{resp.status_code} redirect",
+                                        "info", f"{target} → {hop}")
+                        target = hop
                         continue
 
                     ttfb_ms = int((time.monotonic() - started) * 1000)
@@ -170,7 +202,7 @@ def fetch(url: str, deadline: Deadline, timeout: float = PER_CALL_TIMEOUT_S) -> 
                     raw = b"".join(chunks)
                     encoding = resp.encoding or "utf-8"
                     body = raw.decode(encoding, errors="replace")
-                    return {
+                    return done({
                         "ok": True,
                         "status": resp.status_code,
                         "url": str(resp.url),
@@ -178,24 +210,35 @@ def fetch(url: str, deadline: Deadline, timeout: float = PER_CALL_TIMEOUT_S) -> 
                         "ttfb_ms": ttfb_ms,
                         "elapsed_ms": int((time.monotonic() - started) * 1000),
                         "headers": {k.lower(): v for k, v in resp.headers.items()},
-                    }
-        return {"ok": False, "error": "redirect loop", "error_kind": "http"}
+                    }, "ok" if resp.status_code < 400 else "warn",
+                        f"HTTP {resp.status_code} · {fmt_bytes(size)} · ttfb {ttfb_ms} ms"
+                        + (f" · {resp.headers.get('content-type', '').split(';')[0]}"
+                           if resp.headers.get("content-type") else ""))
+        return done({"ok": False, "error": "redirect loop", "error_kind": "http"},
+                    "error", f"redirect loop after {MAX_REDIRECTS} hops")
     except httpx.ConnectTimeout:
-        return {"ok": False, "error": "connect timeout", "error_kind": "timeout"}
+        return done({"ok": False, "error": "connect timeout", "error_kind": "timeout"},
+                    "error", "connect timeout")
     except httpx.ReadTimeout:
-        return {"ok": False, "error": "read timeout", "error_kind": "timeout"}
+        return done({"ok": False, "error": "read timeout", "error_kind": "timeout"},
+                    "error", "read timeout")
     except ssl.SSLCertVerificationError as exc:
-        return {"ok": False, "error": f"tls verify failed: {exc}", "error_kind": "tls"}
+        return done({"ok": False, "error": f"tls verify failed: {exc}", "error_kind": "tls"},
+                    "error", f"TLS verification failed: {exc}")
     except httpx.ConnectError as exc:
         msg = str(exc).lower()
         if "name or service not known" in msg or "nodename nor servname" in msg \
                 or "temporary failure in name resolution" in msg or "getaddrinfo" in msg:
-            return {"ok": False, "error": "dns resolution failed", "error_kind": "dns"}
+            return done({"ok": False, "error": "dns resolution failed", "error_kind": "dns"},
+                        "error", "DNS resolution failed")
         if "certificate" in msg or "ssl" in msg:
-            return {"ok": False, "error": f"tls error: {exc}", "error_kind": "tls"}
-        return {"ok": False, "error": f"connection refused: {exc}", "error_kind": "refused"}
+            return done({"ok": False, "error": f"tls error: {exc}", "error_kind": "tls"},
+                        "error", f"TLS error: {exc}")
+        return done({"ok": False, "error": f"connection refused: {exc}", "error_kind": "refused"},
+                    "error", "connection refused")
     except Exception as exc:  # our problem, not the merchant's
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "error_kind": "internal"}
+        return done({"ok": False, "error": f"{type(exc).__name__}: {exc}", "error_kind": "internal"},
+                    "error", f"{type(exc).__name__}: {exc}")
 
 
 def fetch_root(domain: str, deadline: Deadline) -> dict:
@@ -203,10 +246,13 @@ def fetch_root(domain: str, deadline: Deadline) -> dict:
     from .domains import root_urls
 
     last = None
-    for url in root_urls(domain):
+    candidates = root_urls(domain)
+    deadline.trace.event("enrich", "Resolving a reachable storefront root", "info",
+                         " → ".join(candidates))
+    for url in candidates:
         if deadline.expired():
             break
-        result = fetch(url, deadline)
+        result = fetch(url, deadline, purpose="storefront root")
         result["attempted"] = url
         if result.get("ok") and result.get("status", 0) < 400:
             return result
@@ -231,7 +277,17 @@ def tls_info(domain: str, deadline: Deadline) -> dict:
         return {"ok": False, "error": "deadline exhausted", "error_kind": "timeout"}
 
     ctx = ssl.create_default_context()
+    trace = deadline.trace
     for host in (domain, f"www.{domain}"):
+        started = time.monotonic()
+        span = trace.event("enrich", f"TLS handshake {host}:443", "running",
+                           "reading the leaf certificate on a raw socket")
+
+        def finish(status: str, detail: str, result: dict) -> dict:
+            trace.event("enrich", span["label"], status, detail, ref=span["id"],
+                        ms=int((time.monotonic() - started) * 1000))
+            return result
+
         try:
             with socket.create_connection((host, 443), timeout=budget) as sock:
                 with ctx.wrap_socket(sock, server_hostname=host) as tls:
@@ -244,21 +300,33 @@ def tls_info(domain: str, deadline: Deadline) -> dict:
                         tzinfo=timezone.utc
                     )
                     days = (expires - datetime.now(timezone.utc)).days
-                    return {
-                        "ok": True, "valid": True, "issuer": issuer,
-                        "expires": expires.date().isoformat(), "days_to_expiry": days,
-                        "protocol": tls.version(), "host": host,
-                    }
+                    return finish(
+                        "ok" if days > 0 else "warn",
+                        f"valid · issuer {issuer} · {tls.version()} · expires "
+                        f"{expires.date().isoformat()} ({days} days)",
+                        {
+                            "ok": True, "valid": True, "issuer": issuer,
+                            "expires": expires.date().isoformat(), "days_to_expiry": days,
+                            "protocol": tls.version(), "host": host,
+                        })
         except ssl.SSLCertVerificationError as exc:
-            return {"ok": True, "valid": False, "issuer": None,
-                    "reason": str(exc.verify_message or exc)[:120], "host": host}
+            reason = str(exc.verify_message or exc)[:120]
+            return finish("warn", f"certificate did not verify: {reason}",
+                          {"ok": True, "valid": False, "issuer": None,
+                           "reason": reason, "host": host})
         except (socket.timeout, TimeoutError):
-            return {"ok": False, "error": "tls handshake timeout", "error_kind": "timeout"}
-        except (socket.gaierror, ConnectionRefusedError, OSError):
-            continue  # try the www host before concluding there is no listener
+            return finish("error", "handshake timed out",
+                          {"ok": False, "error": "tls handshake timeout",
+                           "error_kind": "timeout"})
+        except (socket.gaierror, ConnectionRefusedError, OSError) as exc:
+            # try the www host before concluding there is no listener
+            finish("warn", f"no listener on {host}:443 ({type(exc).__name__})", {})
+            continue
         except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
-                    "error_kind": "internal"}
+            return finish("error", f"{type(exc).__name__}: {exc}",
+                          {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                           "error_kind": "internal"})
+    trace.event("enrich", "TLS inspection", "warn", "no TLS listener on port 443")
     return {"ok": True, "valid": False, "issuer": None,
             "reason": "no TLS listener on port 443", "host": domain}
 
@@ -269,16 +337,20 @@ RDAP_ENDPOINTS = ["https://rdap.org/domain/{d}", "https://www.rdap.net/domain/{d
 
 def rdap_lookup(domain: str, deadline: Deadline) -> dict:
     """Registration events and registrant entities. Free, keyless, authoritative."""
+    trace = deadline.trace
     last_error = "no endpoint reached"
     for template in RDAP_ENDPOINTS:
         if deadline.expired():
             break
-        result = fetch(template.format(d=domain), deadline)
+        url = template.format(d=domain)
+        result = fetch(url, deadline, purpose="RDAP registration record")
         if not result.get("ok"):
             last_error = result.get("error", "unknown")
             continue
         if result["status"] == 404:
-            return {"ok": True, "registered": False, "source": template.format(d=domain)}
+            trace.event("enrich", "RDAP", "warn",
+                        f"{url} has no record for this domain — it is unregistered")
+            return {"ok": True, "registered": False, "source": url}
         if result["status"] != 200:
             last_error = f"HTTP {result['status']}"
             continue
@@ -288,8 +360,16 @@ def rdap_lookup(domain: str, deadline: Deadline) -> dict:
             data = json.loads(result["body"])
         except Exception:
             last_error = "malformed RDAP JSON"
+            trace.event("enrich", "RDAP", "warn", f"{url} returned malformed JSON")
             continue
-        return _parse_rdap(data, template.format(d=domain))
+        parsed = _parse_rdap(data, url)
+        trace.event("enrich", "RDAP parsed", "ok",
+                    f"registered {parsed.get('created') or 'unknown'} · registrar "
+                    f"{parsed.get('registrar') or 'not disclosed'}"
+                    + (" · registrant behind a privacy proxy"
+                       if parsed.get("privacy_proxy") else ""))
+        return parsed
+    trace.event("enrich", "RDAP", "error", f"no endpoint answered ({last_error})")
     return {"ok": False, "error": last_error}
 
 
@@ -411,6 +491,7 @@ def emails_in(text: str) -> list[str]:
 def resolve_a(domain: str, deadline: Deadline) -> dict:
     """First A record for the domain. Used to place the merchant geographically."""
     budget = deadline.budget(PER_CALL_TIMEOUT_S)
+    trace = deadline.trace
     if budget <= 0.1:
         return {"ok": False, "error": "deadline exhausted"}
     try:
@@ -420,19 +501,29 @@ def resolve_a(domain: str, deadline: Deadline) -> dict:
         resolver.lifetime = budget
         resolver.timeout = budget
         for name in (domain, f"www.{domain}"):
-            try:
-                answer = resolver.resolve(name, "A")
-                addresses = [r.address for r in answer]
+            with trace.step("enrich", f"DNS A {name}",
+                            f"resolver {', '.join(resolver.nameservers[:2]) or 'system'}") as step:
+                try:
+                    answer = resolver.resolve(name, "A")
+                    addresses = [r.address for r in answer]
+                except Exception as exc:
+                    step["status"], step["detail"] = "warn", f"{type(exc).__name__}"
+                    continue
                 if addresses:
+                    step["detail"] = " ".join(addresses[:4]) + (
+                        f" (+{len(addresses) - 4} more)" if len(addresses) > 4 else "")
                     return {"ok": True, "ip": addresses[0], "all": addresses, "name": name}
-            except Exception:
-                continue
+                step["status"], step["detail"] = "warn", "empty answer"
         return {"ok": True, "ip": None, "all": [], "error": "no A record"}
     except ImportError:
-        try:
-            ip = socket.gethostbyname(domain)
+        with trace.step("enrich", f"DNS A {domain}", "stdlib resolver") as step:
+            try:
+                ip = socket.gethostbyname(domain)
+            except Exception as exc:
+                step["status"], step["detail"] = "error", f"{type(exc).__name__}: {exc}"
+                return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            step["detail"] = ip
             return {"ok": True, "ip": ip, "all": [ip], "name": domain}
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     except Exception as exc:
+        trace.event("enrich", f"DNS A {domain}", "error", f"{type(exc).__name__}: {exc}")
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
