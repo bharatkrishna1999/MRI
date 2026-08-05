@@ -262,6 +262,14 @@ NO_PRICE = (
     "single dispute would cost us."
 )
 
+# A domain nobody has registered has no age to describe. Running it through the
+# domain_age wording gave "The web address is new — not registered", which reads
+# as a contradiction and understates what was actually found.
+NOT_REGISTERED = (
+    "The web address is not registered to anybody. There is no ownership record for it at "
+    "all, which means there is no website and no business here to take on."
+)
+
 
 def _raw_for(signal: dict):
     """
@@ -287,6 +295,9 @@ def _phrase(signal: dict, good: bool) -> str | None:
     # The absence of any price is its own finding and reads as one.
     if signal["key"] == "price_point" and not (signal.get("detail") or {}).get("highest"):
         return NO_PRICE
+    # Likewise: an absent registration is a different finding from a recent one.
+    if signal["key"] == "domain_age" and (signal.get("detail") or {}).get("registered") is False:
+        return NOT_REGISTERED
     template = entry[0 if good else 1]
     try:
         return template.format(raw=_raw_for(signal))
@@ -410,9 +421,12 @@ def business(domain: str, evidence: dict, signals: list[dict]) -> dict:
                 f"Nothing could be read about {domain}: the site did not serve a usable page "
                 f"on this run ({root.get('raw')}). There is no description here because there "
                 f"was no storefront to describe, not because the merchant published none"),
+            # Not "the site was reached": on a DNS failure it never was, and the
+            # paragraph directly above this line says so. Claim only what is true
+            # of every way a page can fail to arrive.
             "source": (
-                "The site was reached but did not serve a usable page. Nothing here is "
-                "inferred from site content, because none was retrieved."
+                "No page could be retrieved on this run. Nothing here is inferred from site "
+                "content, because none was retrieved."
             ),
         }
 

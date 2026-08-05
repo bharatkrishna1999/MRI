@@ -201,6 +201,37 @@ class TestTheSummaryCannotMoveTheDecision(unittest.TestCase):
                 self.assertEqual(summary["written_by"], "engine")
 
 
+class TestDomainsThatDoNotExist(unittest.TestCase):
+    """
+    An address nobody registered is not an address registered recently, and a
+    domain that does not resolve was never reached. Both were being described
+    with wording borrowed from a case that does not apply.
+    """
+
+    def test_an_unregistered_domain_is_not_described_as_a_new_one(self):
+        signal = {"key": "domain_age", "raw": "not registered",
+                  "detail": {"registered": False}}
+        line = narrative._phrase(signal, good=False)
+        self.assertEqual(line, narrative.NOT_REGISTERED)
+        # The sentence that used to be produced read as a contradiction.
+        self.assertNotIn("is new", line)
+
+    def test_a_recently_registered_domain_still_reads_as_recent(self):
+        signal = {"key": "domain_age", "raw": "18 days", "detail": {"days": 18}}
+        line = narrative._phrase(signal, good=False)
+        self.assertIn("18 days", line)
+        self.assertIn("new", line)
+
+    def test_a_site_that_never_resolved_is_not_reported_as_reached(self):
+        signals = [{"key": "http_root", "status": "ok", "normalized": 0,
+                    "raw": "DNS resolution failed", "detail": {}}]
+        card = narrative.business("gifbdnud.com", {}, signals)
+        self.assertIn("DNS resolution failed", card["paragraph"])
+        # The footer used to assert the opposite of the paragraph above it.
+        self.assertNotIn("was reached", card["source"])
+        self.assertIn("no page could be retrieved", card["source"].lower())
+
+
 class TestOptionalModelLayer(unittest.TestCase):
     """The model is optional, replaceable and incapable of changing a verdict."""
 

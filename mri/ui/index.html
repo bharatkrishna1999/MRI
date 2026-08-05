@@ -562,6 +562,45 @@ $("cauto").addEventListener("click", ()=>{
 // ── Running an evaluation ────────────────────────────────────────────────
 let STREAM = null;
 
+// The Advanced panel is prefilled from what enrichment found, which is useful
+// for re-running the same domain with a correction and actively wrong for the
+// next one. Left alone, a contact email inferred from one merchant stayed in
+// the box, was submitted as declared context against an unrelated domain,
+// raised EMAIL_DOMAIN_MISMATCH against it and was written into that merchant's
+// audit record. It also made `declared` non-empty, which silently bypasses the
+// cache on every subsequent run.
+//
+// So each field remembers whether the engine put the value there or a person
+// did. Inferred values are dropped as soon as the domain changes; anything
+// typed by hand is the user's and is left alone.
+const ADV_FIELDS = ["a_legal", "a_category", "a_country", "a_email"];
+let PREFILLED_FOR = null;
+
+function bareDomain(s){
+  return String(s||"").trim().toLowerCase()
+    .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[/?#].*$/, "");
+}
+
+function markInferred(el, value){
+  el.value = value;
+  el.dataset.inferred = "1";
+}
+
+function dropInferredContext(){
+  ADV_FIELDS.forEach(id=>{
+    const el = $(id);
+    if(el && el.dataset.inferred){ el.value = ""; delete el.dataset.inferred; }
+  });
+  PREFILLED_FOR = null;
+}
+
+// Typing into a prefilled box makes the value the user's, and it survives from
+// then on.
+ADV_FIELDS.forEach(id=>{
+  const el = $(id);
+  if(el) el.addEventListener("input", ()=>{ delete el.dataset.inferred; });
+});
+
 function query(domain){
   const p = new URLSearchParams({domain: domain});
   if($("a_legal").value.trim()) p.set("legal_name", $("a_legal").value.trim());
@@ -575,6 +614,9 @@ function query(domain){
 function go(domain){
   if(!domain || !domain.trim()) return;
   domain = domain.trim();
+  // Before anything is sent: context inferred from a different merchant is not
+  // context for this one.
+  if(PREFILLED_FOR && bareDomain(PREFILLED_FOR) !== bareDomain(domain)) dropInferredContext();
   $("domain").value = domain;
   $("err").style.display = "none";
   $("result").style.display = "none";
@@ -815,12 +857,15 @@ function renderPlain(m){
 function prefillAdvanced(m){
   const e = m.evidence||{};
   const inferred = (m.signals||[]).find(s=>s.key==="category_tier");
-  if(!$("a_country").value && e.geoip && e.geoip.country) $("a_country").value = e.geoip.country;
+  if(!$("a_country").value && e.geoip && e.geoip.country) markInferred($("a_country"), e.geoip.country);
   if(!$("a_category").value && inferred && inferred.detail && inferred.detail.category)
-    $("a_category").value = inferred.detail.category;
+    markInferred($("a_category"), inferred.detail.category);
   const em = (m.signals||[]).find(s=>s.key==="email_domain_match");
-  if(!$("a_email").value && em && em.detail && em.detail.email) $("a_email").value = em.detail.email;
-  if(!$("a_legal").value && e.crawl && e.crawl.title) $("a_legal").value = e.crawl.title.split(/[|·—–-]/)[0].trim().slice(0,60);
+  if(!$("a_email").value && em && em.detail && em.detail.email) markInferred($("a_email"), em.detail.email);
+  if(!$("a_legal").value && e.crawl && e.crawl.title)
+    markInferred($("a_legal"), e.crawl.title.split(/[|·—–-]/)[0].trim().slice(0,60));
+  // Whose enrichment these values came from. `go` compares against it.
+  PREFILLED_FOR = m.domain || null;
 }
 
 function toggle(i,row){ row.classList.toggle("open");
