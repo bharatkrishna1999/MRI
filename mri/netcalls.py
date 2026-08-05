@@ -1,0 +1,423 @@
+"""
+Every outbound call the engine makes, with a hard per-call timeout and a shared
+deadline. Nothing in here raises: each helper returns a result dict carrying
+either data or an `error`, so an upstream failure degrades one signal instead
+of collapsing the run.
+"""
+from __future__ import annotations
+
+import re
+import socket
+import ssl
+import time
+from datetime import datetime, timezone
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
+
+import httpx
+
+from .policy import PER_CALL_TIMEOUT_S
+
+UA = "MerchantRiskIntelligence/1.0 (+underwriting-bot)"
+HEADERS = {
+    "User-Agent": UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+MAX_BODY_BYTES = 1_500_000
+
+
+class Deadline:
+    """A wall-clock budget shared by every call inside one evaluation."""
+
+    def __init__(self, seconds: float):
+        self.expires_at = time.monotonic() + seconds
+        self.total = seconds
+
+    def remaining(self) -> float:
+        return max(0.0, self.expires_at - time.monotonic())
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0.05
+
+    def budget(self, want: float = PER_CALL_TIMEOUT_S) -> float:
+        return max(0.0, min(want, self.remaining()))
+
+
+def _client(timeout: float) -> httpx.Client:
+    return httpx.Client(
+        timeout=httpx.Timeout(timeout, connect=min(timeout, 2.0)),
+        follow_redirects=True,
+        headers=HEADERS,
+        verify=True,
+        max_redirects=4,
+    )
+
+
+# ── HTML parsing ────────────────────────────────────────────────────────────
+class _PageParser(HTMLParser):
+    """Collects anchors and visible text. Stdlib only, no parser dependency."""
+
+    _SKIP = {"script", "style", "noscript", "svg", "template", "head"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.anchors: list[tuple[str, str]] = []
+        self._text: list[str] = []
+        self._skip_depth = 0
+        self._in_a = False
+        self._a_href = ""
+        self._a_text: list[str] = []
+        self.title = ""
+        self._in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        # <title> lives inside <head>, which is skipped for text extraction, so
+        # it has to be flagged before the skip check or it is never captured.
+        if tag == "title":
+            self._in_title = True
+        if tag in self._SKIP:
+            self._skip_depth += 1
+            return
+        if tag == "a":
+            self._in_a = True
+            self._a_href = dict(attrs).get("href") or ""
+            self._a_text = []
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+        if tag in self._SKIP:
+            self._skip_depth = max(0, self._skip_depth - 1)
+            return
+        if tag == "a" and self._in_a:
+            self.anchors.append((self._a_href, " ".join(self._a_text).strip()))
+            self._in_a = False
+            self._a_href = ""
+            self._a_text = []
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title += data.strip()
+        if self._skip_depth:
+            return
+        stripped = data.strip()
+        if not stripped:
+            return
+        self._text.append(stripped)
+        if self._in_a:
+            self._a_text.append(stripped)
+
+    @property
+    def text(self) -> str:
+        return " ".join(self._text)
+
+
+def parse_html(html: str) -> dict:
+    parser = _PageParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        pass  # malformed markup still yields whatever was parsed before the fault
+    text = re.sub(r"\s+", " ", parser.text).strip()
+    return {
+        "text": text,
+        "title": parser.title[:200],
+        "anchors": parser.anchors,
+        "word_count": len(text.split()),
+    }
+
+
+# ── HTTP ────────────────────────────────────────────────────────────────────
+def fetch(url: str, deadline: Deadline, timeout: float = PER_CALL_TIMEOUT_S) -> dict:
+    """
+    GET a URL. Returns status, body, ttfb, final url, and a coarse `error_kind`
+    that distinguishes 'the site is dead' from 'our fetch broke'.
+    """
+    budget = deadline.budget(timeout)
+    if budget <= 0.1:
+        return {"ok": False, "error": "deadline exhausted", "error_kind": "timeout"}
+
+    started = time.monotonic()
+    try:
+        with _client(budget) as client:
+            with client.stream("GET", url) as resp:
+                ttfb_ms = int((time.monotonic() - started) * 1000)
+                chunks, size = [], 0
+                for chunk in resp.iter_bytes():
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size >= MAX_BODY_BYTES:
+                        break
+                raw = b"".join(chunks)
+                encoding = resp.encoding or "utf-8"
+                body = raw.decode(encoding, errors="replace")
+                return {
+                    "ok": True,
+                    "status": resp.status_code,
+                    "url": str(resp.url),
+                    "body": body,
+                    "ttfb_ms": ttfb_ms,
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                    "headers": {k.lower(): v for k, v in resp.headers.items()},
+                }
+    except httpx.ConnectTimeout:
+        return {"ok": False, "error": "connect timeout", "error_kind": "timeout"}
+    except httpx.ReadTimeout:
+        return {"ok": False, "error": "read timeout", "error_kind": "timeout"}
+    except ssl.SSLCertVerificationError as exc:
+        return {"ok": False, "error": f"tls verify failed: {exc}", "error_kind": "tls"}
+    except httpx.ConnectError as exc:
+        msg = str(exc).lower()
+        if "name or service not known" in msg or "nodename nor servname" in msg \
+                or "temporary failure in name resolution" in msg or "getaddrinfo" in msg:
+            return {"ok": False, "error": "dns resolution failed", "error_kind": "dns"}
+        if "certificate" in msg or "ssl" in msg:
+            return {"ok": False, "error": f"tls error: {exc}", "error_kind": "tls"}
+        return {"ok": False, "error": f"connection refused: {exc}", "error_kind": "refused"}
+    except httpx.TooManyRedirects:
+        return {"ok": False, "error": "redirect loop", "error_kind": "http"}
+    except Exception as exc:  # our problem, not the merchant's
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "error_kind": "internal"}
+
+
+def fetch_root(domain: str, deadline: Deadline) -> dict:
+    """Try https://domain, then https://www.domain, then http://domain."""
+    from .domains import root_urls
+
+    last = None
+    for url in root_urls(domain):
+        if deadline.expired():
+            break
+        result = fetch(url, deadline)
+        result["attempted"] = url
+        if result.get("ok") and result.get("status", 0) < 400:
+            return result
+        last = result
+        # A DNS failure on the apex will repeat on www; do not burn budget twice
+        # unless the apex itself is what failed to resolve.
+        if result.get("error_kind") == "dns" and url.startswith("https://www."):
+            break
+    return last or {"ok": False, "error": "no attempt made", "error_kind": "internal"}
+
+
+# ── TLS ─────────────────────────────────────────────────────────────────────
+def tls_info(domain: str, deadline: Deadline) -> dict:
+    """
+    Inspect the leaf certificate: validity, issuer, days to expiry.
+
+    Done on a raw socket rather than through httpx so an invalid certificate is
+    an observation we can score, not an exception that kills the fetch.
+    """
+    budget = deadline.budget(PER_CALL_TIMEOUT_S)
+    if budget <= 0.1:
+        return {"ok": False, "error": "deadline exhausted", "error_kind": "timeout"}
+
+    ctx = ssl.create_default_context()
+    for host in (domain, f"www.{domain}"):
+        try:
+            with socket.create_connection((host, 443), timeout=budget) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host) as tls:
+                    cert = tls.getpeercert()
+                    issuer = dict(x[0] for x in cert.get("issuer", ())).get(
+                        "organizationName", "unknown"
+                    )
+                    not_after = cert.get("notAfter")
+                    expires = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(
+                        tzinfo=timezone.utc
+                    )
+                    days = (expires - datetime.now(timezone.utc)).days
+                    return {
+                        "ok": True, "valid": True, "issuer": issuer,
+                        "expires": expires.date().isoformat(), "days_to_expiry": days,
+                        "protocol": tls.version(), "host": host,
+                    }
+        except ssl.SSLCertVerificationError as exc:
+            return {"ok": True, "valid": False, "issuer": None,
+                    "reason": str(exc.verify_message or exc)[:120], "host": host}
+        except (socket.timeout, TimeoutError):
+            return {"ok": False, "error": "tls handshake timeout", "error_kind": "timeout"}
+        except (socket.gaierror, ConnectionRefusedError, OSError):
+            continue  # try the www host before concluding there is no listener
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                    "error_kind": "internal"}
+    return {"ok": True, "valid": False, "issuer": None,
+            "reason": "no TLS listener on port 443", "host": domain}
+
+
+# ── RDAP ────────────────────────────────────────────────────────────────────
+RDAP_ENDPOINTS = ["https://rdap.org/domain/{d}", "https://www.rdap.net/domain/{d}"]
+
+
+def rdap_lookup(domain: str, deadline: Deadline) -> dict:
+    """Registration events and registrant entities. Free, keyless, authoritative."""
+    last_error = "no endpoint reached"
+    for template in RDAP_ENDPOINTS:
+        if deadline.expired():
+            break
+        result = fetch(template.format(d=domain), deadline)
+        if not result.get("ok"):
+            last_error = result.get("error", "unknown")
+            continue
+        if result["status"] == 404:
+            return {"ok": True, "registered": False, "source": template.format(d=domain)}
+        if result["status"] != 200:
+            last_error = f"HTTP {result['status']}"
+            continue
+        try:
+            import json
+
+            data = json.loads(result["body"])
+        except Exception:
+            last_error = "malformed RDAP JSON"
+            continue
+        return _parse_rdap(data, template.format(d=domain))
+    return {"ok": False, "error": last_error}
+
+
+def _parse_rdap(data: dict, source: str) -> dict:
+    events = {}
+    for event in data.get("events", []) or []:
+        action = event.get("eventAction")
+        date = event.get("eventDate")
+        if action and date:
+            events.setdefault(action, date)
+
+    created = events.get("registration")
+    expires = events.get("expiration")
+    changed = events.get("last changed") or events.get("last update of RDAP database")
+
+    registrar = ""
+    privacy_hit = ""
+    for entity in data.get("entities", []) or []:
+        roles = entity.get("roles", []) or []
+        name = _vcard_field(entity, "fn")
+        org = _vcard_field(entity, "org")
+        if "registrar" in roles and name:
+            registrar = name
+        if {"registrant", "administrative", "technical"} & set(roles):
+            blob = f"{name} {org}".strip().lower()
+            if blob and _looks_like_privacy_proxy(blob):
+                privacy_hit = (name or org)[:80]
+
+    # Some registries drop the registrant entity entirely rather than mask it.
+    has_registrant = any(
+        "registrant" in (e.get("roles") or []) for e in (data.get("entities") or [])
+    )
+    redacted_flag = any(
+        "redacted" in str(r).lower() for r in (data.get("remarks") or [])
+    ) or bool(data.get("redacted"))
+
+    return {
+        "ok": True,
+        "registered": bool(created),
+        "created": created,
+        "expires": expires,
+        "changed": changed,
+        "registrar": registrar,
+        "status": data.get("status", []),
+        "privacy_proxy": bool(privacy_hit) or (not has_registrant) or redacted_flag,
+        "privacy_evidence": privacy_hit or (
+            "registrant entity absent or redacted" if not has_registrant or redacted_flag else ""
+        ),
+        "source": source,
+    }
+
+
+def _vcard_field(entity: dict, key: str) -> str:
+    for item in (entity.get("vcardArray") or [[], []])[1]:
+        try:
+            if item[0] == key:
+                value = item[3]
+                return value if isinstance(value, str) else " ".join(map(str, value))
+        except (IndexError, TypeError):
+            continue
+    return ""
+
+
+PRIVACY_PROXY_MARKERS = [
+    "privacy", "redacted", "whoisguard", "domains by proxy", "perfect privacy",
+    "contact privacy", "withheld", "identity protect", "privacyprotect",
+    "data protected", "not disclosed", "gdpr masked", "anonymize", "proxy protection",
+    "domain protection services", "super privacy service",
+]
+
+
+def _looks_like_privacy_proxy(blob: str) -> bool:
+    return any(marker in blob for marker in PRIVACY_PROXY_MARKERS)
+
+
+# ── Link discovery ──────────────────────────────────────────────────────────
+def internal_links(base_url: str, domain: str, anchors: list[tuple[str, str]]) -> list[dict]:
+    """
+    Resolve every anchor against the base URL and keep the ones that stay on the
+    merchant's own registrable domain. Deduplicated, non-asset, http(s) only.
+    """
+    from .domains import domain_parts
+
+    seen, out = set(), []
+    for href, text in anchors:
+        if not href:
+            continue
+        href = href.strip()
+        if href.startswith(("mailto:", "tel:", "javascript:", "#", "data:")):
+            continue
+        try:
+            absolute = urljoin(base_url, href)
+            parsed = urlparse(absolute)
+        except Exception:
+            continue
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            continue
+        host = parsed.netloc.split(":")[0].lower()
+        parts = domain_parts(host)
+        if f"{parts.domain}.{parts.suffix}" != domain:
+            continue
+        if re.search(r"\.(png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|mp4|woff2?)$",
+                     parsed.path, re.I):
+            continue
+        clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/") or absolute
+        if clean in seen:
+            continue
+        seen.add(clean)
+        out.append({"url": clean, "text": (text or "")[:120], "href": href})
+    return out
+
+
+def emails_in(text: str) -> list[str]:
+    found = re.findall(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", text or "", re.I)
+    return sorted({e.lower() for e in found})
+
+
+# ── DNS ─────────────────────────────────────────────────────────────────────
+def resolve_a(domain: str, deadline: Deadline) -> dict:
+    """First A record for the domain. Used to place the merchant geographically."""
+    budget = deadline.budget(PER_CALL_TIMEOUT_S)
+    if budget <= 0.1:
+        return {"ok": False, "error": "deadline exhausted"}
+    try:
+        import dns.resolver
+
+        resolver = dns.resolver.Resolver()
+        resolver.lifetime = budget
+        resolver.timeout = budget
+        for name in (domain, f"www.{domain}"):
+            try:
+                answer = resolver.resolve(name, "A")
+                addresses = [r.address for r in answer]
+                if addresses:
+                    return {"ok": True, "ip": addresses[0], "all": addresses, "name": name}
+            except Exception:
+                continue
+        return {"ok": True, "ip": None, "all": [], "error": "no A record"}
+    except ImportError:
+        try:
+            ip = socket.gethostbyname(domain)
+            return {"ok": True, "ip": ip, "all": [ip], "name": domain}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

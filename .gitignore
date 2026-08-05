@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
+data/evaluations.db
+data/evaluations.db-wal
+data/evaluations.db-shm
