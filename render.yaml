@@ -11,5 +11,11 @@ services:
       # is unreachable the reputation signal drops out of the denominator.
       - key: SAFE_BROWSING_API_KEY
         sync: false
+      # Optional. Google AI Studio key, free tier. With one set, the two
+      # plain-English summaries are rewritten by gemini-2.5-flash after the
+      # decision is final; without one the engine's own wording ships. Set the
+      # value in the Render dashboard — sync: false keeps it out of this file.
+      - key: GEMINI_API_KEY
+        sync: false
       - key: MRI_PUBLIC_URL
         sync: false
