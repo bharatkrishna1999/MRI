@@ -78,6 +78,17 @@ class _PageParser(HTMLParser):
 
     _SKIP = {"script", "style", "noscript", "svg", "template", "head"}
 
+    # The merchant's own one-line description of itself. Written for a search
+    # result or a link preview, so it is already the length and register a
+    # summary wants — and it is the merchant's words, not ours.
+    _META_KEYS = {
+        "description": "description",
+        "og:description": "og_description",
+        "twitter:description": "og_description",
+        "og:site_name": "site_name",
+        "application-name": "site_name",
+    }
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.anchors: list[tuple[str, str]] = []
@@ -88,12 +99,19 @@ class _PageParser(HTMLParser):
         self._a_text: list[str] = []
         self.title = ""
         self._in_title = False
+        self.meta: dict[str, str] = {}
+        self.headings: list[str] = []
+        self._heading_depth = 0
+        self._heading_text: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        # <title> lives inside <head>, which is skipped for text extraction, so
-        # it has to be flagged before the skip check or it is never captured.
+        # <title> and <meta> live inside <head>, which is skipped for text
+        # extraction, so they have to be handled before the skip check or they
+        # are never captured.
         if tag == "title":
             self._in_title = True
+        if tag == "meta":
+            self._meta(dict(attrs))
         if tag in self._SKIP:
             self._skip_depth += 1
             return
@@ -101,6 +119,18 @@ class _PageParser(HTMLParser):
             self._in_a = True
             self._a_href = dict(attrs).get("href") or ""
             self._a_text = []
+        if tag in ("h1", "h2"):
+            self._heading_depth += 1
+            self._heading_text = []
+
+    def _meta(self, attrs: dict) -> None:
+        key = (attrs.get("name") or attrs.get("property") or "").strip().lower()
+        content = (attrs.get("content") or "").strip()
+        field = self._META_KEYS.get(key)
+        # First one wins: a page that repeats og:description in three places is
+        # not saying three different things.
+        if field and content and field not in self.meta:
+            self.meta[field] = content[:400]
 
     def handle_endtag(self, tag):
         if tag == "title":
@@ -113,6 +143,12 @@ class _PageParser(HTMLParser):
             self._in_a = False
             self._a_href = ""
             self._a_text = []
+        if tag in ("h1", "h2") and self._heading_depth:
+            self._heading_depth = max(0, self._heading_depth - 1)
+            heading = " ".join(self._heading_text).strip()
+            if heading and len(self.headings) < 12:
+                self.headings.append(heading[:160])
+            self._heading_text = []
 
     def handle_data(self, data):
         if self._in_title:
@@ -125,6 +161,8 @@ class _PageParser(HTMLParser):
         self._text.append(stripped)
         if self._in_a:
             self._a_text.append(stripped)
+        if self._heading_depth:
+            self._heading_text.append(stripped)
 
     @property
     def text(self) -> str:
@@ -139,11 +177,16 @@ def parse_html(html: str) -> dict:
     except Exception:
         pass  # malformed markup still yields whatever was parsed before the fault
     text = re.sub(r"\s+", " ", parser.text).strip()
+    meta = parser.meta
     return {
         "text": text,
         "title": parser.title[:200],
         "anchors": parser.anchors,
         "word_count": len(text.split()),
+        "description": re.sub(
+            r"\s+", " ", meta.get("description") or meta.get("og_description") or "").strip(),
+        "site_name": meta.get("site_name", ""),
+        "headings": parser.headings,
     }
 
 

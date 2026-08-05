@@ -151,6 +151,27 @@ details.adv[open] summary:before{transform:rotate(90deg)}
 .terms dd{font-size:16px;font-weight:600}
 .rationale{margin-top:18px;font-size:13.5px;line-height:1.6;opacity:.95;max-width:900px}
 
+/* The two plain-English summaries. Read before anything else on the page, so
+   they sit directly under the verdict and are set larger than the tables. */
+.plain{font-size:15px;line-height:1.68;max-width:74ch}
+.plain p{margin-bottom:13px}
+.plain p:last-child{margin-bottom:0}
+.plain .lead{font-weight:600;font-size:16px}
+.plain ul{list-style:none;margin:0 0 13px}
+.plain li{padding:7px 0 7px 24px;position:relative;line-height:1.55}
+.plain li:before{position:absolute;left:2px;font-weight:700}
+.plain li.up:before{content:"+";color:var(--good)}
+.plain li.down:before{content:"−";color:var(--bad)}
+.plain .grouphead{font-size:11px;text-transform:uppercase;letter-spacing:.7px;
+  color:var(--muted);margin:16px 0 2px}
+.plain .decisive{background:#fff8ec;border-left:3px solid var(--warn);border-radius:0 8px 8px 0;
+  padding:12px 14px;margin-bottom:13px;font-size:14.5px}
+.selfsaid{font-style:italic;color:var(--muted);border-left:3px solid var(--line);
+  padding-left:12px;margin-bottom:13px;font-size:14px;line-height:1.55}
+.byline{font-size:11.5px;color:var(--muted);margin-top:14px;padding-top:12px;
+  border-top:1px solid var(--line);line-height:1.5}
+.byline b{font-family:var(--mono);font-weight:500;font-size:11px}
+
 .grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start}
 /* Grid and flex children default to min-width:auto, so the 560px-wide
    breakdown table would widen the page itself rather than scroll inside its
@@ -223,7 +244,8 @@ footer{border-top:1px solid var(--line);padding:22px 0 max(40px,env(safe-area-in
   padding:3px 7px;border-radius:4px}
 
 /* ── Narrow screens ───────────────────────────────────────────────────────── */
-@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.grid2.even{grid-template-columns:1fr 1fr}
+@media(max-width:900px){.grid2,.grid2.even{grid-template-columns:1fr}}
 @media(max-width:640px){
   :root{--gutter:16px}
   body{font-size:14.5px}
@@ -326,6 +348,19 @@ footer{border-top:1px solid var(--line);padding:22px 0 max(40px,env(safe-area-in
     </div>
     <dl class="terms" id="v_terms"></dl>
     <p class="rationale" id="v_rationale"></p>
+  </div>
+
+  <div class="grid2 even">
+    <div class="card">
+      <h3>What this business appears to be</h3>
+      <div class="plain" id="v_business"></div>
+      <p class="byline" id="v_business_by"></p>
+    </div>
+    <div class="card">
+      <h3>Why this decision — in plain English</h3>
+      <div class="plain" id="v_why"></div>
+      <p class="byline" id="v_why_by"></p>
+    </div>
   </div>
 
   <div class="card dark" id="tracecard" style="display:none">
@@ -451,7 +486,7 @@ $("form").addEventListener("submit", e=>{ e.preventDefault(); go($("domain").val
 // Long-running work arrives twice: once as `running`, once with `ref` pointing
 // back at it. The second replaces the first in place, so the log reads like a
 // terminal rather than doubling every line.
-const PHASES = ["input","cache","enrich","crawl","infer","signals","score","decide","persist"];
+const PHASES = ["input","cache","enrich","crawl","infer","signals","score","decide","narrate","persist"];
 const CONSOLE = {lines:new Map(), count:0, autoscroll:true, timer:null, started:0, seen:new Set()};
 
 function consoleReset(domain){
@@ -637,6 +672,7 @@ function render(m){
     ? `Score alone bought "${bandName(m.scored_band)}" — capped by ${m.overrides_applied.map(o=>o.code).join(", ")}`
     : "";
   $("v_rationale").textContent = m.rationale;
+  renderPlain(m);
 
   $("v_terms").innerHTML = [
     ["Reserve", m.reserve_pct===null?"—":m.reserve_pct+"%"],
@@ -720,6 +756,52 @@ function render(m){
     : `This run was not persisted${m.persistence_error?": "+m.persistence_error:"."}`;
 
   prefillAdvanced(m);
+}
+
+// ── The two plain-English summaries ──────────────────────────────────────
+// Both are written by the engine on every run. When a model rewrite is
+// configured it ships alongside, and is preferred for display — but the
+// engine's own wording is what was stored with the decision, so the byline
+// always says which one is on screen.
+function renderPlain(m){
+  const s = m.summary;
+  if(!s){ $("v_business").innerHTML = ""; $("v_why").innerHTML = ""; return; }
+  const model = s.model || null;
+
+  // What the business is.
+  const b = s.business || {};
+  let bh = "";
+  if(b.self_description) bh += `<div class="selfsaid">“${esc(b.self_description)}”<br>— ${esc(b.name||m.domain)}, in its own words</div>`;
+  bh += `<p>${esc(model ? model.business : b.paragraph)}</p>`;
+  $("v_business").innerHTML = bh;
+  $("v_business_by").innerHTML = model
+    ? `Rewritten by <b>${esc(model.model)}</b> from the engine's own summary. The engine's version is kept in the record.`
+    : esc(b.source || "");
+
+  // Why the decision.
+  const w = s.why || {};
+  let wh = "";
+  if(model){
+    wh = `<p class="lead">${esc(w.verdict)}</p><p>${esc(model.why)}</p>`;
+  } else {
+    wh = `<p class="lead">${esc(w.verdict)} ${esc(w.money)}</p>`;
+    wh += `<p>${esc(w.score_line)}</p>`;
+    (w.decisive||[]).forEach(d=>{ wh += `<div class="decisive">${esc(d)}</div>`; });
+    if((w.hurt||[]).length){
+      wh += `<div class="grouphead">What went against it</div><ul>`
+          + w.hurt.map(x=>`<li class="down">${esc(x)}</li>`).join("") + `</ul>`;
+    }
+    if((w.helped||[]).length){
+      wh += `<div class="grouphead">What went in its favour</div><ul>`
+          + w.helped.map(x=>`<li class="up">${esc(x)}</li>`).join("") + `</ul>`;
+    }
+    if(w.confidence) wh += `<p>${esc(w.confidence)}</p>`;
+    wh += `<div class="grouphead">What happens next</div><p>${esc(w.next_step)}</p>`;
+  }
+  $("v_why").innerHTML = wh;
+  $("v_why_by").innerHTML = model
+    ? `Rewritten by <b>${esc(model.model)}</b> after the decision was final. A model never scores, overrides or reviews a decision here — it only rewords one.`
+    : `Written by the engine from the signals below. No model was involved.`;
 }
 
 // T1: the Advanced panel comes back prefilled from what enrichment found.

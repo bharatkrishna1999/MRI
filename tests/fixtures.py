@@ -11,8 +11,13 @@ FILLER = ("We build tools for engineering teams that need to ship faster. " * 40
 POLICY_FILLER = ("This agreement sets out the terms under which the service is provided. " * 30)
 
 
-def _page(title: str, body: str) -> str:
-    return f"<!doctype html><html><head><title>{title}</title></head><body>{body}</body></html>"
+def _page(title: str, body: str, description: str = "", site_name: str = "") -> str:
+    head = f"<title>{title}</title>"
+    if description:
+        head += f'<meta name="description" content="{description}">'
+    if site_name:
+        head += f'<meta property="og:site_name" content="{site_name}">'
+    return f"<!doctype html><html><head>{head}</head><body>{body}</body></html>"
 
 
 NAV = """
@@ -38,7 +43,10 @@ GOOD_SITE = {
       <p>Pricing from $29 per month, billed monthly. Cancel anytime.</p>
       <p>{FILLER}</p>
       <script src="https://js.stripe.com/v3/"></script>
-      <footer>© 2019 Acme Cloud Inc · support@goodsaas.com</footer>"""),
+      <footer>© 2019 Acme Cloud Inc · support@goodsaas.com</footer>""",
+      description="Acme Cloud is workflow automation for B2B engineering teams. "
+                  "Plans from $29 a month, cancel anytime.",
+      site_name="Acme Cloud"),
     "https://goodsaas.com/pricing": _page("Pricing — Acme Cloud", f"""
       <h1>Plans</h1><p>Starter $29 per month. Team $99 per month. Enterprise $499 per month.
       All plans billed monthly, cancel anytime.</p><p>{FILLER}</p>"""),

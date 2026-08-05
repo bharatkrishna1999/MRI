@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import benchmark as bench
-from . import geo, store
+from . import geo, llm, store
 from .domains import InvalidDomain
 from .engine import Declared
 from .policy import (
@@ -221,6 +221,7 @@ def demos():
 
 @app.get("/api/v1/policy")
 def policy():
+    _narration = llm.configured()
     return {
         "policy_version": POLICY_VERSION,
         "effective": POLICY_EFFECTIVE,
@@ -238,6 +239,15 @@ def policy():
         "taxonomy": CATEGORY_CHOICES,
         "geoip": geo.database_info(),
         "safe_browsing_key_configured": bool(os.environ.get("SAFE_BROWSING_API_KEY")),
+        # Who writes the two summaries on every result. The engine always
+        # writes them; a model only ever rewrites what the engine wrote, after
+        # the decision is final.
+        "narration": {
+            "always_written_by_engine": True,
+            "model_rewrite_enabled": _narration["enabled"],
+            "provider": _narration["provider"],
+            "model": _narration["model"],
+        },
     }
 
 

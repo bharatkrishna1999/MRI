@@ -232,8 +232,12 @@ def strip_prohibited_context(text: str) -> str:
     return " ".join(kept)
 
 
+# Keyword kept alongside its pattern. A hit has to be reportable as the words
+# that matched — "saas, b2b, dashboard" — because it is quoted back in the
+# signal's reason, in the run trace and in the plain-English summary. The
+# compiled source, which is what it used to report, is unreadable in all three.
 _CATEGORY_RE = {
-    cid: [re.compile(r"(?<![a-z0-9])" + re.escape(kw) + r"(?![a-z0-9])", re.I) for kw in kws]
+    cid: [(kw, re.compile(r"(?<![a-z0-9])" + re.escape(kw) + r"(?![a-z0-9])", re.I)) for kw in kws]
     for cid, (_, _, kws) in CATEGORIES.items()
 }
 
@@ -259,7 +263,7 @@ def infer_category(text: str) -> dict:
     scores = {}
     hits_by_cat = {}
     for cid, patterns in _CATEGORY_RE.items():
-        hits = [p.pattern for p in patterns if p.search(text)]
+        hits = [kw for kw, rx in patterns if rx.search(text)]
         if hits:
             scores[cid] = len(hits)
             hits_by_cat[cid] = hits

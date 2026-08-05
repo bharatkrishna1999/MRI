@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 
+from . import llm
 from .engine import Declared, evaluate
 from .policy import CACHE_TTL_S, GLOBAL_TIMEOUT_S, POLICY_VERSION
 from .store import cached, record
@@ -49,7 +50,7 @@ _warm_lock = threading.Lock()
 
 def run(domain_input: str, declared: Declared | None = None,
         use_cache: bool = True, timeout: float = GLOBAL_TIMEOUT_S,
-        sink=None) -> dict:
+        sink=None, narrate: bool = True) -> dict:
     """
     Evaluate a domain, preferring a cached decision under 24 hours old.
 
@@ -60,6 +61,12 @@ def run(domain_input: str, declared: Declared | None = None,
     `sink` is a callable that receives every trace event as it is recorded. The
     SSE endpoint passes one so the browser can watch the run; everything else
     leaves it unset and reads `result["trace"]` at the end.
+
+    `narrate=False` skips the optional model rewrite of the summaries. The
+    benchmark passes it: sixty domains is sixty model calls for prose nobody
+    reads, and on a free tier that is the whole day's quota. The engine's own
+    summaries are written either way — they are part of the decision, not an
+    extra.
     """
     from .domains import normalize_domain
 
@@ -90,6 +97,14 @@ def run(domain_input: str, declared: Declared | None = None,
 
     result = evaluate(domain_input, declared, timeout=timeout, trace=trace)
     result["cached"] = False
+
+    # Optional, off unless a key is set, and deliberately here rather than in
+    # the engine: the decision is final before this runs, so a model rewrite
+    # cannot influence it and a model outage cannot delay it. The engine's own
+    # wording is already in the result and stays there either way.
+    if narrate and llm.enabled():
+        result["summary"] = llm.narrate(result["summary"], result, trace=trace)
+
     with trace.step("persist", "Writing the audit record",
                     "SQLite — inputs, every raw signal value, the policy version") as step:
         try:

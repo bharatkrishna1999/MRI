@@ -183,7 +183,10 @@ class TestTrace(unittest.TestCase):
         self.assertLess(phases.index("enrich"), phases.index("signals"))
         self.assertLess(phases.index("signals"), phases.index("score"))
         self.assertLess(phases.index("score"), phases.index("decide"))
-        self.assertEqual(phases[-1], "decide")
+        # Everything after the verdict is prose. The summary reads the decision;
+        # it is never part of making one.
+        after = set(phases[phases.index("decide"):])
+        self.assertEqual(after, {"decide", "narrate"})
 
     def test_a_failing_upstream_is_recorded_rather_than_hidden(self):
         result = run_against("goodsaas.com", fixtures.GOOD_SITE,
