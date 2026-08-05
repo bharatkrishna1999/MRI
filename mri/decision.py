@@ -157,6 +157,12 @@ def _action_items(band: dict, codes: list[str], signals: list) -> list[str]:
                 "Open the site and confirm what it actually sells. The declared category does not "
                 "match the content, and that gap is the reason this is not an automated approval."
             )
+        if "CATEGORY_RESTRICTED_REVIEW" in codes:
+            items.append(
+                "Read the storefront and confirm the vertical. Restricted-list keywords appear "
+                "in the merchant's own copy but not strongly enough to decline on; this is a "
+                "call a person makes, not the keyword scan."
+            )
         if "TLS_INVALID" in codes:
             items.append("Require a valid TLS certificate before boarding; card entry is unsafe without one.")
         if "LOW_CONFIDENCE" in codes:

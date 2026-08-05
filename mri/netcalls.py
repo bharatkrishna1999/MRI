@@ -45,13 +45,20 @@ class Deadline:
         return max(0.0, min(want, self.remaining()))
 
 
+MAX_REDIRECTS = 4
+
+
 def _client(timeout: float) -> httpx.Client:
+    # Redirects are followed by hand in `fetch` rather than by httpx, because an
+    # httpx timeout is per request attempt: with follow_redirects=True a 3 second
+    # budget and a four hop chain is a 15 second call, and several of those in a
+    # thread pool is how an 8 second evaluation takes 20. Following them here
+    # means every hop is charged against the same shared deadline.
     return httpx.Client(
         timeout=httpx.Timeout(timeout, connect=min(timeout, 2.0)),
-        follow_redirects=True,
+        follow_redirects=False,
         headers=HEADERS,
         verify=True,
-        max_redirects=4,
     )
 
 
@@ -136,33 +143,43 @@ def fetch(url: str, deadline: Deadline, timeout: float = PER_CALL_TIMEOUT_S) -> 
     GET a URL. Returns status, body, ttfb, final url, and a coarse `error_kind`
     that distinguishes 'the site is dead' from 'our fetch broke'.
     """
-    budget = deadline.budget(timeout)
-    if budget <= 0.1:
-        return {"ok": False, "error": "deadline exhausted", "error_kind": "timeout"}
-
     started = time.monotonic()
+    target = url
     try:
-        with _client(budget) as client:
-            with client.stream("GET", url) as resp:
-                ttfb_ms = int((time.monotonic() - started) * 1000)
-                chunks, size = [], 0
-                for chunk in resp.iter_bytes():
-                    chunks.append(chunk)
-                    size += len(chunk)
-                    if size >= MAX_BODY_BYTES:
-                        break
-                raw = b"".join(chunks)
-                encoding = resp.encoding or "utf-8"
-                body = raw.decode(encoding, errors="replace")
-                return {
-                    "ok": True,
-                    "status": resp.status_code,
-                    "url": str(resp.url),
-                    "body": body,
-                    "ttfb_ms": ttfb_ms,
-                    "elapsed_ms": int((time.monotonic() - started) * 1000),
-                    "headers": {k.lower(): v for k, v in resp.headers.items()},
-                }
+        for _ in range(MAX_REDIRECTS + 1):
+            # Re-budgeted every hop, so a redirect chain cannot outlive the
+            # evaluation's deadline no matter how long it is.
+            budget = deadline.budget(timeout)
+            if budget <= 0.1:
+                return {"ok": False, "error": "deadline exhausted", "error_kind": "timeout"}
+
+            with _client(budget) as client:
+                with client.stream("GET", target) as resp:
+                    location = resp.headers.get("location")
+                    if resp.is_redirect and location:
+                        target = str(resp.url.join(location))
+                        continue
+
+                    ttfb_ms = int((time.monotonic() - started) * 1000)
+                    chunks, size = [], 0
+                    for chunk in resp.iter_bytes():
+                        chunks.append(chunk)
+                        size += len(chunk)
+                        if size >= MAX_BODY_BYTES:
+                            break
+                    raw = b"".join(chunks)
+                    encoding = resp.encoding or "utf-8"
+                    body = raw.decode(encoding, errors="replace")
+                    return {
+                        "ok": True,
+                        "status": resp.status_code,
+                        "url": str(resp.url),
+                        "body": body,
+                        "ttfb_ms": ttfb_ms,
+                        "elapsed_ms": int((time.monotonic() - started) * 1000),
+                        "headers": {k.lower(): v for k, v in resp.headers.items()},
+                    }
+        return {"ok": False, "error": "redirect loop", "error_kind": "http"}
     except httpx.ConnectTimeout:
         return {"ok": False, "error": "connect timeout", "error_kind": "timeout"}
     except httpx.ReadTimeout:
@@ -177,8 +194,6 @@ def fetch(url: str, deadline: Deadline, timeout: float = PER_CALL_TIMEOUT_S) -> 
         if "certificate" in msg or "ssl" in msg:
             return {"ok": False, "error": f"tls error: {exc}", "error_kind": "tls"}
         return {"ok": False, "error": f"connection refused: {exc}", "error_kind": "refused"}
-    except httpx.TooManyRedirects:
-        return {"ok": False, "error": "redirect loop", "error_kind": "http"}
     except Exception as exc:  # our problem, not the merchant's
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "error_kind": "internal"}
 

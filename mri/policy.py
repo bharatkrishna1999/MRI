@@ -8,8 +8,13 @@ response and every rendered result page.
 """
 from __future__ import annotations
 
-POLICY_VERSION = "policy_v1.0"
-POLICY_EFFECTIVE = "2026-08-04"
+# v1.1: category inference reads the pages that describe the offering rather than
+# the terms and privacy boilerplate, and a restricted tier has to be confirmed
+# before it declines on its own. Same 24 signals and same 100 weight points, but
+# a v1.0 decision and a v1.1 decision on the same domain can differ, so they do
+# not get to carry the same stamp.
+POLICY_VERSION = "policy_v1.1"
+POLICY_EFFECTIVE = "2026-08-05"
 
 # ── Category weights, 100 points total ──────────────────────────────────────
 CATEGORY_WEIGHTS = {
@@ -192,6 +197,9 @@ REASON_CODES = {
     "HIGH_TICKET": "Highest listed price exceeds the high-ticket threshold.",
     "RECURRING_NO_CANCELLATION": "Recurring billing offered without cancellation terms.",
     "CATEGORY_RESTRICTED": "Inferred category is on the restricted list.",
+    "CATEGORY_RESTRICTED_REVIEW": (
+        "Site content reads as a restricted vertical, but too thinly to decline on."
+    ),
     "CATEGORY_ELEVATED": "Inferred category is on the elevated-risk list.",
     "CATEGORY_MISMATCH": "Declared category does not match the category inferred from site content.",
     "CATEGORY_UNKNOWN": "Site content did not map to any category in the taxonomy.",
@@ -210,6 +218,7 @@ BAND_OVERRIDES = {
     "CATEGORY_RESTRICTED": "decline",
     "PARKED_DOMAIN": "decline",
     "SITE_UNREACHABLE": "decline",
+    "CATEGORY_RESTRICTED_REVIEW": "manual_review",
     "CATEGORY_MISMATCH": "manual_review",
     "NO_REFUND_POLICY": "approve_with_reserve",
     "TLS_INVALID": "manual_review",

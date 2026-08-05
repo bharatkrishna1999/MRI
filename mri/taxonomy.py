@@ -10,6 +10,16 @@ Category inference runs off site content only. The merchant's own dropdown
 selection is never an input to a score; it is only ever compared against the
 inferred category to produce a mismatch flag, because self-declaration is
 exactly what a fraudulent applicant lies about.
+
+Two rules keep the inference honest about *what the merchant sells*, as opposed
+to what words happen to appear somewhere on the domain:
+
+  * text that sits inside a prohibition is not evidence of the vertical. A
+    merchant that publishes "we do not serve casinos" is telling us it is not a
+    casino, and reading that sentence as gambling copy inverts its meaning.
+  * a restricted tier is the only finding in the policy that declines an
+    applicant on its own, so it has to clear an evidence bar before it is
+    allowed to. A single incidental keyword routes to a human instead.
 """
 from __future__ import annotations
 
@@ -103,10 +113,13 @@ CATEGORIES = {
     ]),
 
     # ── Restricted ──────────────────────────────────────────────────────────
+    # "whitepaper", "apy" and "buy $" used to live here. They are ordinary B2B
+    # and ecommerce vocabulary — every SaaS company publishes a whitepaper — and
+    # a term that common cannot be allowed to contribute to a decline.
     "crypto_tokens": ("Crypto and token sales", TIER_RESTRICTED, [
-        "token sale", "presale", "ico", "initial coin offering", "airdrop",
-        "connect wallet", "metamask", "tokenomics", "staking rewards", "apy",
-        "buy $", "whitepaper", "defi", "nft mint", "web3",
+        "token sale", "presale", "initial coin offering", "airdrop",
+        "connect wallet", "metamask", "tokenomics", "staking rewards",
+        "defi", "nft mint", "web3",
     ]),
     "gambling": ("Gambling", TIER_RESTRICTED, [
         "casino", "slots", "roulette", "sportsbook", "betting odds", "place a bet",
@@ -139,10 +152,13 @@ CATEGORIES = {
         "recruit your team", "residual income", "join my team", "compensation plan",
         "passive income system", "financial freedom program",
     ]),
+    # "apr" used to live here. It matches the month abbreviation in every
+    # "Apr 2026" dateline on the web, which put a restricted tier on any site
+    # with a blog index in the crawl.
     "lending": ("Lending", TIER_RESTRICTED, [
         "payday loan", "instant loan", "cash advance", "borrow up to",
-        "loan approval in minutes", "apr", "no credit check loan", "installment loan",
-        "lending platform",
+        "loan approval in minutes", "annual percentage rate", "no credit check loan",
+        "installment loan", "lending platform",
     ]),
 }
 
@@ -158,8 +174,13 @@ LABEL_BY_CATEGORY = {cid: label for cid, (label, _, _) in CATEGORIES.items()}
 # Restricted-vertical keyword scan. Deliberately narrower and higher-precision
 # than the inference keywords above: these are terms that rarely appear on a
 # site that is not actually in the vertical.
+# `\bico\b` used to be on this list. "the ICO" is the UK Information
+# Commissioner's Office, named in a large share of the privacy policies this
+# crawler reads, so it flagged the merchants with the best data-protection
+# hygiene. It is replaced by the unambiguous long forms.
 RESTRICTED_KEYWORD_PATTERNS = [
-    r"\btoken\s?sale\b", r"\bico\b", r"\bpresale\b", r"\bairdrop\b",
+    r"\btoken\s?sale\b", r"\binitial\s+coin\s+offering\b", r"\bico\s+(?:token|sale|launch)\b",
+    r"\bpresale\b", r"\bairdrop\b",
     r"\bconnect\s+wallet\b", r"\btokenomics\b",
     r"\bcasino\b", r"\bsportsbook\b", r"\bfree\s+spins\b", r"\bwagering\s+requirement\b",
     r"\bno\s+prescription\b", r"\bgeneric\s+viagra\b",
@@ -173,6 +194,44 @@ RESTRICTED_KEYWORD_PATTERNS = [
 
 _RESTRICTED_RE = [re.compile(p, re.I) for p in RESTRICTED_KEYWORD_PATTERNS]
 
+
+# ── Prohibition context ─────────────────────────────────────────────────────
+# A sentence that forbids a vertical is evidence the merchant is not in it. The
+# clearest example is the acceptable-use page every payment company publishes:
+# it names casinos, payday lenders, pharmacies and token sales in one paragraph,
+# for the sole purpose of refusing them. Scanning that as product copy classifies
+# a merchant as the exact set of businesses it will not do business with.
+PROHIBITION_MARKERS = [
+    r"prohibit", r"restricted business", r"not permitted", r"not allowed",
+    r"unsupported business", r"unacceptable use", r"acceptable use",
+    r"we do not (?:support|serve|accept|work with|allow|offer)",
+    r"cannot be used for", r"may not be used (?:for|to)", r"forbidden",
+    r"banned", r"disallowed", r"ineligible", r"excluded from",
+    r"in violation of", r"illegal",
+]
+_PROHIBITION_RE = re.compile("|".join(PROHIBITION_MARKERS), re.I)
+
+# Sentence-ish split. Legal pages are dense with semicolon-separated lists, and
+# an item in a prohibited-business list belongs to the clause that introduced it,
+# so semicolons and bullets do not end the prohibition's scope — full stops do.
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
+
+# A restricted tier is the only inference in this policy that declines an
+# applicant outright, so it has to be more than a single stray word.
+RESTRICTED_MIN_HITS = 2
+
+
+def strip_prohibited_context(text: str) -> str:
+    """
+    Drop the sentences in which the merchant is forbidding a vertical rather
+    than selling it. Everything else is returned untouched.
+    """
+    if not text:
+        return ""
+    kept = [s for s in _SENTENCE_RE.split(text) if not _PROHIBITION_RE.search(s)]
+    return " ".join(kept)
+
+
 _CATEGORY_RE = {
     cid: [re.compile(r"(?<![a-z0-9])" + re.escape(kw) + r"(?![a-z0-9])", re.I) for kw in kws]
     for cid, (_, _, kws) in CATEGORIES.items()
@@ -185,9 +244,17 @@ def infer_category(text: str) -> dict:
 
     Returns the best category, its tier, the hit count, and the runners-up so a
     reviewer can see how close the call was.
+
+    `confident` is only ever False for a restricted result. It reports whether
+    the restricted reading is strong enough to decline on, or whether it is a
+    thin reading that a human should look at instead.
     """
+    empty = {"category": None, "tier": None, "score": 0, "hits": [],
+             "ranked": [], "confident": True, "runner_up": 0}
+
+    text = strip_prohibited_context(text)
     if not text or len(text.split()) < 20:
-        return {"category": None, "tier": None, "score": 0, "hits": [], "ranked": []}
+        return empty
 
     scores = {}
     hits_by_cat = {}
@@ -198,7 +265,7 @@ def infer_category(text: str) -> dict:
             hits_by_cat[cid] = hits
 
     if not scores:
-        return {"category": None, "tier": None, "score": 0, "hits": [], "ranked": []}
+        return empty
 
     # Restricted and elevated categories win ties: a site that reads as both a
     # SaaS tool and a token sale is underwritten as a token sale.
@@ -208,10 +275,25 @@ def infer_category(text: str) -> dict:
 
     ranked = sorted(scores.items(), key=rank_key, reverse=True)
     best_id, best_n = ranked[0]
+    best_tier = TIER_BY_CATEGORY[best_id]
+
+    # How strongly the site reads as something we would happily board. A
+    # restricted call that merely ties with an ordinary reading of the same page
+    # is not a decline, it is a question for a human.
+    runner_up = max(
+        (n for cid, n in ranked if TIER_BY_CATEGORY[cid] != TIER_RESTRICTED),
+        default=0,
+    )
+    confident = best_tier != TIER_RESTRICTED or (
+        best_n >= RESTRICTED_MIN_HITS and best_n > runner_up
+    )
+
     return {
         "category": best_id,
-        "tier": TIER_BY_CATEGORY[best_id],
+        "tier": best_tier,
         "score": best_n,
+        "confident": confident,
+        "runner_up": runner_up,
         "hits": hits_by_cat[best_id][:6],
         "ranked": [
             {"category": cid, "label": LABEL_BY_CATEGORY[cid],
@@ -224,6 +306,7 @@ def infer_category(text: str) -> dict:
 def scan_restricted_keywords(text: str) -> list[str]:
     if not text:
         return []
+    text = strip_prohibited_context(text)
     found = []
     for rx in _RESTRICTED_RE:
         m = rx.search(text)

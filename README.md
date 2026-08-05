@@ -42,9 +42,19 @@ A number out of 100 is not a decision. These are:
 | 0–39 | Decline with reason codes | n/a | n/a |
 
 Some findings override the band the score would have bought. A Safe Browsing
-hit, a restricted category, a parked domain or an unreachable site declines
-regardless of how clean everything else is. A missing refund policy alone caps
-the outcome at *approve with reserve* — it can never auto-approve.
+hit, a confirmed restricted category, a parked domain or an unreachable site
+declines regardless of how clean everything else is. A missing refund policy
+alone caps the outcome at *approve with reserve* — it can never auto-approve.
+
+A restricted category is the only finding here that declines on the engine's own
+reading of a page, so it has to earn it. The inference runs on the pages that
+describe the offering, never on terms and privacy boilerplate — a merchant's
+acceptable-use page names every vertical it *refuses*, and reading that as a
+description of the merchant declines the applicants with the best compliance
+hygiene. Sentences that prohibit a vertical are dropped before matching, and a
+restricted reading that rests on one keyword, or that only ties with an ordinary
+reading of the same page, caps at *manual review* instead of declining: a person
+reads the storefront and makes the call.
 
 ## The signal set
 
@@ -170,7 +180,7 @@ on every future boot with no network calls at all.
 
 ```
 python -m mri.benchmark
-git add data/benchmark_results.json && git commit -m "Benchmark run under policy_v1.0"
+git add data/benchmark_results.json && git commit -m "Benchmark run under policy_v1.1"
 ```
 
 ## Tests
