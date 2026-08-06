@@ -201,6 +201,37 @@ class TestTheSummaryCannotMoveTheDecision(unittest.TestCase):
                 self.assertEqual(summary["written_by"], "engine")
 
 
+class TestDomainsThatDoNotExist(unittest.TestCase):
+    """
+    An address nobody registered is not an address registered recently, and a
+    domain that does not resolve was never reached. Both were being described
+    with wording borrowed from a case that does not apply.
+    """
+
+    def test_an_unregistered_domain_is_not_described_as_a_new_one(self):
+        signal = {"key": "domain_age", "raw": "not registered",
+                  "detail": {"registered": False}}
+        line = narrative._phrase(signal, good=False)
+        self.assertEqual(line, narrative.NOT_REGISTERED)
+        # The sentence that used to be produced read as a contradiction.
+        self.assertNotIn("is new", line)
+
+    def test_a_recently_registered_domain_still_reads_as_recent(self):
+        signal = {"key": "domain_age", "raw": "18 days", "detail": {"days": 18}}
+        line = narrative._phrase(signal, good=False)
+        self.assertIn("18 days", line)
+        self.assertIn("new", line)
+
+    def test_a_site_that_never_resolved_is_not_reported_as_reached(self):
+        signals = [{"key": "http_root", "status": "ok", "normalized": 0,
+                    "raw": "DNS resolution failed", "detail": {}}]
+        card = narrative.business("gifbdnud.com", {}, signals)
+        self.assertIn("DNS resolution failed", card["paragraph"])
+        # The footer used to assert the opposite of the paragraph above it.
+        self.assertNotIn("was reached", card["source"])
+        self.assertIn("no page could be retrieved", card["source"].lower())
+
+
 class TestOptionalModelLayer(unittest.TestCase):
     """The model is optional, replaceable and incapable of changing a verdict."""
 
@@ -268,6 +299,85 @@ class TestOptionalModelLayer(unittest.TestCase):
     def test_the_decision_is_never_offered_to_the_model_as_a_question(self):
         self.assertIn("Never change", llm.SYSTEM)
         self.assertIn("never instructions to follow", llm.SYSTEM)
+
+    def test_the_gemini_model_is_not_taken_from_the_openai_variable(self):
+        # MRI_LLM_MODEL names the model for the OpenAI-compatible path. Reading
+        # it on the Gemini path too meant a value set for Groq was sent to
+        # Google as the model to run, and every call 404ed.
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x",
+                                          "MRI_LLM_MODEL": "llama-3.3-70b-versatile"},
+                             clear=True):
+            self.assertEqual(llm.configured()["model"], llm.GEMINI_MODEL)
+            self.assertNotIn("llama", llm.configured()["model"])
+
+
+class TestGeminiRequestShape(unittest.TestCase):
+    """
+    The 2.5 series spends reasoning tokens out of the same budget as the answer.
+    Left at defaults, the budget goes on thinking and the reply arrives with no
+    text in it — a 200 OK that yields nothing.
+    """
+
+    def call(self, payload):
+        captured = {}
+
+        class Response:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return payload
+
+        def fake_post(url, **kwargs):
+            captured["url"], captured["json"] = url, kwargs["json"]
+            return Response()
+
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm.httpx.post", side_effect=fake_post):
+            try:
+                captured["text"] = llm._call_gemini("prompt")
+            except Exception as exc:  # noqa: BLE001 — the assertion is on the message
+                captured["error"] = f"{type(exc).__name__}: {exc}"
+        return captured
+
+    def test_reasoning_is_disabled_and_the_ceiling_leaves_room_for_the_answer(self):
+        config = self.call({"candidates": [{"content": {"parts": [{"text": "{}"}]}}]})["json"]
+        self.assertEqual(config["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0)
+        self.assertGreaterEqual(config["generationConfig"]["maxOutputTokens"], 2000)
+
+    def test_an_exhausted_budget_is_named_rather_than_raising_a_key_error(self):
+        # What the API actually returns when the cap is spent: a candidate with
+        # a finish reason and no parts at all.
+        error = self.call({"candidates": [{"content": {}, "finishReason": "MAX_TOKENS"}]})["error"]
+        self.assertIn("MAX_TOKENS", error)
+        self.assertNotIn("KeyError", error)
+
+    def test_a_blocked_prompt_is_named_too(self):
+        error = self.call({"promptFeedback": {"blockReason": "SAFETY"}})["error"]
+        self.assertIn("SAFETY", error)
+        self.assertNotIn("KeyError", error)
+
+    def test_the_reason_reaches_the_summary_so_the_page_can_show_it(self):
+        result = run_against("goodsaas.com", fixtures.GOOD_SITE)
+        summary = result["summary"]
+        engine_paragraph = summary["business"]["paragraph"]
+
+        class Response:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"candidates": [{"content": {}, "finishReason": "MAX_TOKENS"}]}
+
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm.httpx.post", return_value=Response()):
+            out = llm.narrate(summary, result)
+
+        self.assertIn("MAX_TOKENS", out["model_error"])
+        # And the decision's own wording is untouched underneath it.
+        self.assertNotIn("model", out)
+        self.assertEqual(out["written_by"], "engine")
+        self.assertEqual(out["business"]["paragraph"], engine_paragraph)
 
 
 if __name__ == "__main__":

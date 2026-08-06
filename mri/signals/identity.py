@@ -44,9 +44,12 @@ def domain_age(rdap: dict) -> "Signal":
     if not rdap.get("ok"):
         return unavailable("domain_age", f"RDAP lookup did not return a record ({rdap.get('error')}).")
     if rdap.get("registered") is False:
+        # The flag, not the raw string, is what the plain-English layer reads.
+        # An unregistered domain has no age, and describing it as a new one
+        # produced "The web address is new — not registered."
         return ok("domain_age", "not registered", 0,
                   "RDAP reports no registration record for this domain at all.",
-                  ["SITE_UNREACHABLE"])
+                  ["SITE_UNREACHABLE"], registered=False)
 
     created = _parse_rdap_date(rdap.get("created"))
     if created is None:
