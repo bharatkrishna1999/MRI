@@ -8,13 +8,23 @@ response and every rendered result page.
 """
 from __future__ import annotations
 
+# v1.2: absence of a commercial surface stops paying points. Three signals used
+# to award partial credit for observing nothing — a site with no billing language
+# was scored as "one-time", a site with no price as merely unsized, a site too
+# thin to classify as mid-ladder — and on a brochure site those add up to a
+# quarter of the score. They now either measure something or abstain. Site
+# liveness is reweighted so content depth is half the category, which is what its
+# own docstring always claimed. And a site that publishes no policy page, no
+# price and no processor raises NO_COMMERCIAL_SURFACE, because those are not
+# independent findings to be averaged — they are one finding, observed six times.
+# Same 24 signals and same 100 weight points; a v1.1 and a v1.2 decision on the
+# same domain can differ, so they do not get to carry the same stamp.
+#
 # v1.1: category inference reads the pages that describe the offering rather than
 # the terms and privacy boilerplate, and a restricted tier has to be confirmed
-# before it declines on its own. Same 24 signals and same 100 weight points, but
-# a v1.0 decision and a v1.1 decision on the same domain can differ, so they do
-# not get to carry the same stamp.
-POLICY_VERSION = "policy_v1.1"
-POLICY_EFFECTIVE = "2026-08-05"
+# before it declines on its own.
+POLICY_VERSION = "policy_v1.2"
+POLICY_EFFECTIVE = "2026-08-20"
 
 # ── Category weights, 100 points total ──────────────────────────────────────
 CATEGORY_WEIGHTS = {
@@ -75,13 +85,21 @@ SIGNAL_SPEC = {
     "privacy_proxy":       ("domain_identity", 4, "Registrant privacy proxy"),
     "tld_abuse":           ("domain_identity", 4, "TLD abuse tier"),
     # Site liveness — 20
-    # Content depth is the heaviest of these on purpose. Serving HTTP 200 with a
-    # valid certificate is free and takes ten minutes; publishing several hundred
-    # words about a real product does not. Weighting the cheap signals equally
-    # with the expensive one is what lets a two-paragraph shell site look alive.
-    "http_root":           ("site_liveness", 4, "HTTP root response"),
-    "tls":                 ("site_liveness", 4, "TLS certificate"),
-    "content_depth":       ("site_liveness", 6, "Content depth"),
+    # Content depth is the heaviest of these on purpose, and until v1.2 it was
+    # not: 6 points against 14 for the four cheap ones. Serving HTTP 200 with a
+    # valid certificate and a fast first byte is free — a $12 domain behind a CDN,
+    # ten minutes of work — while publishing several hundred words about a real
+    # product is not. At 6/20 the cheap signals outvoted the expensive one better
+    # than two to one, which is how a 125-word brochure scored 76/100 for having
+    # a "real, serving storefront". Content depth is now 40% of its category,
+    # exactly as refund policy is 40% of commercial legitimacy, and for the same
+    # reason: it is the one member of the category that costs the merchant
+    # something to satisfy. It stops there rather than going higher, because
+    # refund policy is the heaviest single signal in this policy and a proxy for
+    # effort should not outrank a direct predictor of chargebacks.
+    "http_root":           ("site_liveness", 3, "HTTP root response"),
+    "tls":                 ("site_liveness", 3, "TLS certificate"),
+    "content_depth":       ("site_liveness", 8, "Content depth"),
     "parked":              ("site_liveness", 4, "Parked page check"),
     "ttfb":                ("site_liveness", 2, "Time to first byte"),
     # Commercial legitimacy — 20 (refund is 40% of the category by design)
@@ -194,6 +212,11 @@ REASON_CODES = {
     "NO_CONTACT_PAGE": "No contact page found.",
     "NO_PRICING_PAGE": "No pricing page found.",
     "NO_PROCESSOR_DETECTED": "No incumbent payment processor detected in page source.",
+    "NO_PRICE_PUBLISHED": "No price is published anywhere on the crawled pages.",
+    "NO_COMMERCIAL_SURFACE": (
+        "Site publishes no policy page, no price and no payment processor — there is no "
+        "commercial surface to underwrite."
+    ),
     "HIGH_TICKET": "Highest listed price exceeds the high-ticket threshold.",
     "RECURRING_NO_CANCELLATION": "Recurring billing offered without cancellation terms.",
     "CATEGORY_RESTRICTED": "Inferred category is on the restricted list.",
@@ -203,6 +226,9 @@ REASON_CODES = {
     "CATEGORY_ELEVATED": "Inferred category is on the elevated-risk list.",
     "CATEGORY_MISMATCH": "Declared category does not match the category inferred from site content.",
     "CATEGORY_UNKNOWN": "Site content did not map to any category in the taxonomy.",
+    "CATEGORY_UNREADABLE": (
+        "Site carries too little text to establish what it sells."
+    ),
     "RESTRICTED_KEYWORDS": "Restricted-vertical keywords present in site content.",
     "SAFEBROWSING_HIT": "Google Safe Browsing lists this domain.",
     "GEO_MISMATCH": "Declared country disagrees with hosting country and ccTLD.",
@@ -218,6 +244,12 @@ BAND_OVERRIDES = {
     "CATEGORY_RESTRICTED": "decline",
     "PARKED_DOMAIN": "decline",
     "SITE_UNREACHABLE": "decline",
+    # A live page that sells nothing is not a merchant. This fires only when the
+    # crawl actually looked and found all of it absent: no refund, terms, privacy,
+    # contact or pricing page, no processor in the source, no price and no
+    # checkout language anywhere. A crawl that ran out of budget leaves those
+    # signals unavailable rather than zero and cannot trip it.
+    "NO_COMMERCIAL_SURFACE": "decline",
     "CATEGORY_RESTRICTED_REVIEW": "manual_review",
     "CATEGORY_MISMATCH": "manual_review",
     "NO_REFUND_POLICY": "approve_with_reserve",

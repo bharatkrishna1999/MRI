@@ -82,3 +82,46 @@ def contact_page(bundle: dict) -> "Signal":
 
 def pricing_page(bundle: dict) -> "Signal":
     return _page_signal("pricing", bundle)
+
+
+def no_commercial_surface(signals: list, bundle: dict) -> bool:
+    """
+    Is this a live page with no business behind it at all?
+
+    Five missing policy pages, no processor, no price and no checkout language
+    are not eight independent findings that a weighted average should thin out
+    against each other. They are one finding — nobody is selling anything here —
+    observed eight ways, and averaging correlated evidence is exactly how a
+    brochure site keeps the free points that a valid certificate, a fast first
+    byte and an unparked homepage hand to any domain bought this morning.
+
+    The conjunction is deliberately unforgiving in what it requires and
+    deliberately narrow in when it can fire:
+
+    * The crawl must have *looked*. Every one of the five page signals has to
+      have scored zero, meaning it searched the site's links and found nothing.
+      A crawl that ran out of budget leaves those signals unavailable instead,
+      and unavailable never trips this.
+    * A single mark of commerce anywhere clears it. One published price, one
+      processor fingerprint, one "add to cart", one pricing page, or a support
+      address on the homepage (which scores the contact page at 55, not zero)
+      and this does not fire.
+
+    That leaves the case it is meant for: a site we read in full, that publishes
+    no terms, no refund policy, no privacy policy, no way to contact anyone, no
+    price, and no means of taking money. That is not a merchant with a weak
+    application. It is not a merchant.
+    """
+    from .base import OK
+    from .payment import commercial_surface
+
+    if not bundle.get("root_ok"):
+        return False  # SITE_UNREACHABLE covers this; do not double-count it.
+
+    by_key = {s.key: s for s in signals}
+    for _, (signal_key, _, _, _) in PAGE_SIGNALS.items():
+        signal = by_key.get(signal_key)
+        if signal is None or signal.status != OK or signal.normalized != 0:
+            return False
+
+    return not commercial_surface(bundle)["any"]

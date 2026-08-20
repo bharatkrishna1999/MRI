@@ -21,7 +21,7 @@ to tell the merchant. They say the same thing.
 """
 from __future__ import annotations
 
-from .policy import REASON_CODES
+from .policy import BAND_OVERRIDES, REASON_CODES
 from .taxonomy import LABEL_BY_CATEGORY, TIER_BY_CATEGORY
 
 # ── Wording tables ──────────────────────────────────────────────────────────
@@ -115,6 +115,13 @@ DECISIVE = {
         "There is no refund or cancellation page anywhere on the site. A customer who cannot "
         "find how to get their money back asks their bank instead, and that arrives as a "
         "chargeback — so this can never be an automatic yes, however clean the rest is."
+    ),
+    "NO_COMMERCIAL_SURFACE": (
+        "There is nothing for sale here. No refund policy, no terms, no privacy policy, no "
+        "contact page and no prices — and no way to pay, either: no checkout, no card "
+        "processor, not a single price anywhere on the site. The address loads and the "
+        "certificate is valid, but a page that loads is not a shop. We are being asked to "
+        "process payments for a business that has not shown us a business."
     ),
     "TLS_INVALID": (
         "The site's security certificate is missing or broken, so card details typed into it "
@@ -262,6 +269,22 @@ NO_PRICE = (
     "single dispute would cost us."
 )
 
+# Distinct from NO_PRICE: not "they did not print a number" but "there is nothing
+# here to put a number on".
+NOTHING_FOR_SALE = (
+    "Nothing on the site is actually for sale — no price, no prices page, no checkout and no "
+    "card processor. There is no purchase to size a dispute against."
+)
+
+# "What it sells reads as unreadable (129 words)" is not a sentence, and the
+# finding underneath it is not "we dislike this line of business" — it is that
+# we could not work out what the line of business is.
+NOTHING_ESTABLISHED = (
+    "We could not work out what this business actually sells. The site never says, in so many "
+    "words, and there is nothing on it being offered for sale — so there is no way to tell "
+    "what we would be taking on."
+)
+
 # A domain nobody has registered has no age to describe. Running it through the
 # domain_age wording gave "The web address is new — not registered", which reads
 # as a contradiction and understates what was actually found.
@@ -294,7 +317,12 @@ def _phrase(signal: dict, good: bool) -> str | None:
     # "The most expensive thing on sale is no price found" is not a sentence.
     # The absence of any price is its own finding and reads as one.
     if signal["key"] == "price_point" and not (signal.get("detail") or {}).get("highest"):
+        if not (signal.get("detail") or {}).get("surface"):
+            return NOTHING_FOR_SALE
         return NO_PRICE
+    # Likewise: an unreadable site is not a line of business we dislike.
+    if signal["key"] == "category_tier" and "CATEGORY_UNREADABLE" in (signal.get("codes") or []):
+        return NOTHING_ESTABLISHED
     # Likewise: an absent registration is a different finding from a recent one.
     if signal["key"] == "domain_age" and (signal.get("detail") or {}).get("registered") is False:
         return NOT_REGISTERED
@@ -312,13 +340,22 @@ def _helped_and_hurt(signals: list[dict]) -> tuple[list[str], list[str]]:
     A signal that hurt is ranked by the points it cost — weight minus what it
     earned — so a heavy signal scoring badly outranks a light one scoring zero.
     A signal that helped is ranked by the points it brought in.
+
+    Ties are broken towards the finding that actually constrains the decision.
+    Two signals can cost identical points while meaning very different things to
+    an underwriter: a missing refund policy caps the band on its own, a thin
+    homepage does not. When they cost the same, name the one with teeth first,
+    because that is the sentence the reader has to act on.
     """
     computed = [s for s in signals
                 if s.get("status") == "ok" and s.get("normalized") is not None]
 
+    def decisive(signal) -> int:
+        return int(any(c in BAND_OVERRIDES for c in (signal.get("codes") or [])))
+
     hurt = sorted(
         (s for s in computed if s["normalized"] < BAD_UNDER),
-        key=lambda s: s["weight"] - s["contribution"], reverse=True)
+        key=lambda s: (s["weight"] - s["contribution"], decisive(s)), reverse=True)
     helped = sorted(
         (s for s in computed if s["normalized"] >= GOOD_AT),
         key=lambda s: s["contribution"], reverse=True)

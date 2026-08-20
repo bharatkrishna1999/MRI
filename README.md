@@ -50,9 +50,21 @@ A number out of 100 is not a decision. These are:
 | 0–39 | Decline with reason codes | n/a | n/a |
 
 Some findings override the band the score would have bought. A Safe Browsing
-hit, a confirmed restricted category, a parked domain or an unreachable site
-declines regardless of how clean everything else is. A missing refund policy
-alone caps the outcome at *approve with reserve* — it can never auto-approve.
+hit, a confirmed restricted category, a parked domain, an unreachable site or a
+site with no commercial surface at all declines regardless of how clean
+everything else is. A missing refund policy alone caps the outcome at *approve
+with reserve* — it can never auto-approve.
+
+`NO_COMMERCIAL_SURFACE` is the one override that is a statement about the
+signals jointly rather than about any one of them. Five missing policy pages, no
+processor fingerprint, no price and no checkout language are not eight
+independent findings for a weighted average to thin out against each other; they
+are one finding — nobody is selling anything here — observed eight ways.
+Averaging correlated evidence is how a live page with a valid certificate and a
+fast first byte keeps the free points that any domain bought this morning earns.
+It fires only when the crawl actually looked and found all of it absent: a crawl
+that ran out of budget leaves those signals *unavailable*, and unavailable never
+trips it, so an upstream timeout can never manufacture a decline.
 
 A restricted category is the only finding here that declines on the engine's own
 reading of a page, so it has to earn it. The inference runs on the pages that
@@ -175,7 +187,7 @@ for prose nobody reads.
 | Category | Weight | Signals |
 |---|---:|---|
 | Domain identity | 20 | age from RDAP creation (8), registration term (4), privacy proxy (4), TLD abuse tier (4) |
-| Site liveness | 20 | content depth (6), HTTP root (4), TLS validity + issuer + days to expiry (4), parked-page check (4), TTFB (2) |
+| Site liveness | 20 | **content depth (8)**, HTTP root (3), TLS validity + issuer + days to expiry (3), parked-page check (4), TTFB (2) |
 | Commercial legitimacy | 20 | **refund or cancellation policy (8)**, terms (3), privacy (3), contact (3), pricing (3) |
 | Payment surface | 15 | incumbent processor in page source (7), highest listed price (4), recurring billing (4) |
 | Category risk | 15 | inferred category tier (9), declared vs inferred mismatch (3), restricted keyword scan (3) |
@@ -191,6 +203,18 @@ Two rules the engine will not bend:
   twice any other page. Its absence is the strongest single predictor of
   chargeback volume: a customer who cannot find how to get their money back from
   the merchant asks their bank instead, and that arrives as a dispute.
+- **Content depth is weighted hardest in its category** — 8 of the 20 points,
+  for the same reason and by the same fraction. Serving HTTP 200 with a valid
+  certificate, no parking template and a fast first byte is a $12 domain behind
+  a CDN and ten minutes of work; writing several hundred words about a real
+  product is not. It is the only member of the category that costs the merchant
+  something to satisfy, and it does not outrank refund policy.
+- **Absence of evidence is never scored as evidence.** A signal that observed
+  nothing abstains and leaves the weighted denominator; it does not pay out. A
+  site with no billing surface has no billing model to call "one-time", a clean
+  restricted-keyword scan over 120 words clears nobody, and a site too thin to
+  classify that also shows no sign of selling anything is not an unplaceable
+  merchant — it is a site where we could not establish that there is a business.
 - **Nothing is ever scored off the merchant's own dropdown.** The declared
   category is used for exactly one thing — comparing it against the category
   inferred from the site's own text to raise `CATEGORY_MISMATCH`. Declaring a
@@ -334,7 +358,7 @@ on every future boot with no network calls at all.
 
 ```
 python -m mri.benchmark
-git add data/benchmark_results.json && git commit -m "Benchmark run under policy_v1.1"
+git add data/benchmark_results.json && git commit -m "Benchmark run under policy_v1.2"
 ```
 
 ## Tests
