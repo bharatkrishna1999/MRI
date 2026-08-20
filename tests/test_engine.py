@@ -201,7 +201,9 @@ class TestShellSite(unittest.TestCase):
     def setUp(self):
         self.result = run_against(
             "shellco.top", fixtures.SHELL_SITE,
-            rdap_data=fixtures.rdap("2026-07-20T00:00:00Z", "2027-07-20T00:00:00Z", privacy=True),
+            # Relative, not absolute: this fixture is asserting DOM_AGE_LT_30, so
+            # the date has to stay inside the 30-day window as the clock moves.
+            rdap_data=fixtures.rdap(fixtures.days_ago(10), fixtures.days_ahead(355), privacy=True),
         )
 
     def test_declines(self):
@@ -213,6 +215,186 @@ class TestShellSite(unittest.TestCase):
         for expected in ("DOM_AGE_LT_30", "NO_REFUND_POLICY", "THIN_CONTENT",
                          "TLD_HIGH_ABUSE", "DOM_PRIVACY_PROXY", "DOM_TERM_MINIMUM"):
             self.assertIn(expected, codes)
+
+
+class TestBrochureSite(unittest.TestCase):
+    """
+    The regression this policy version exists for.
+
+    A live page on a clean TLD, valid certificate, fast first byte, no parking
+    template — and no refund policy, no terms, no privacy policy, no contact
+    page, no prices, no processor and 125 words that never say what is sold.
+    Under v1.1 that scored 47.2 and went to manual review, because four signals
+    paid out for observing nothing and the free hygiene points averaged the
+    emptiness away. It is not a marginal application; there is no merchant.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = run_against(
+            "brochure.in", fixtures.BROCHURE_SITE,
+            rdap_data=fixtures.rdap(fixtures.days_ago(250), fixtures.days_ahead(115),
+                                    privacy=True),
+        )
+        cls.codes = {c["code"] for c in cls.result["reason_codes"]}
+
+    def test_it_declines(self):
+        self.assertEqual(self.result["band"], "decline")
+
+    def test_the_empty_storefront_is_one_finding_not_eight(self):
+        self.assertIn("NO_COMMERCIAL_SURFACE", self.codes)
+        self.assertTrue(
+            any(o["code"] == "NO_COMMERCIAL_SURFACE"
+                for o in self.result["overrides_applied"]),
+            self.result["overrides_applied"])
+
+    def test_signals_that_measured_nothing_do_not_pay_out(self):
+        by_key = {s["key"]: s for s in self.result["signals"]}
+        # No billing surface at all: the recurrence question has no answer, so it
+        # abstains rather than scoring 75 for "one-time".
+        self.assertEqual(by_key["recurring_billing"]["status"], "unavailable")
+        # A clean keyword scan over 120 words clears nobody.
+        self.assertEqual(by_key["restricted_keywords"]["status"], "unavailable")
+        # Nothing for sale is not the same as a price we could not size.
+        self.assertEqual(by_key["price_point"]["normalized"], 15)
+        # Too little text to establish what the business is.
+        self.assertEqual(by_key["category_tier"]["normalized"], 15)
+
+    def test_confidence_stays_high_because_nothing_upstream_failed(self):
+        # The abstentions here are real measurements of an empty site, not an
+        # outage, so this must not masquerade as a low-confidence run.
+        self.assertGreaterEqual(self.result["confidence"], 0.60)
+        self.assertNotIn("LOW_CONFIDENCE", self.codes)
+
+
+class TestThinButRealMerchant(unittest.TestCase):
+    """
+    The counter-case. A one-page shop says very little and still plainly sells:
+    real prices, a real processor, every policy page. The fix is a conjunction
+    precisely so that this is not swept up with the brochure above.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = run_against("tinyshop.com", fixtures.SMALL_SHOP_SITE)
+        cls.codes = {c["code"] for c in cls.result["reason_codes"]}
+
+    def test_a_shop_with_a_checkout_is_never_an_empty_storefront(self):
+        self.assertNotIn("NO_COMMERCIAL_SURFACE", self.codes)
+        self.assertNotEqual(self.result["band"], "decline")
+
+    def test_being_unclassifiable_while_visibly_trading_is_not_held_against_it(self):
+        tier = next(s for s in self.result["signals"] if s["key"] == "category_tier")
+        self.assertEqual(tier["normalized"], 50)
+        self.assertNotIn("CATEGORY_UNREADABLE", self.codes)
+
+    def test_it_still_boards(self):
+        self.assertGreaterEqual(self.result["score"], 60)
+
+
+class TestUnlistedVertical(unittest.TestCase):
+    """
+    A real business in a vertical the acceptance taxonomy simply does not carry.
+    That is a gap in our lexicon, not a finding against the merchant, and the
+    corpus-length gate must not turn it into one.
+    """
+
+    def test_a_substantial_site_is_not_punished_for_our_taxonomy(self):
+        result = run_against("trailco.com", fixtures.UNLISTED_VERTICAL_SITE)
+        codes = {c["code"] for c in result["reason_codes"]}
+        self.assertNotIn("CATEGORY_UNREADABLE", codes)
+        self.assertNotIn("NO_COMMERCIAL_SURFACE", codes)
+        self.assertEqual(result["band"], "auto_approve")
+
+
+class TestEmptyStorefrontIsNarrowlyDrawn(unittest.TestCase):
+    """
+    NO_COMMERCIAL_SURFACE caps at decline, so what it takes to trip it matters
+    more than what it does once tripped.
+    """
+
+    def test_a_truncated_crawl_can_never_trip_it(self):
+        """
+        The five page signals go unavailable when the crawl runs out of budget,
+        not zero. An upstream timeout must not manufacture a decline — that is
+        the failure mode this whole engine is built to avoid.
+        """
+        from mri.signals.commercial import no_commercial_surface, refund_policy
+
+        truncated = {"root_ok": True, "crawl_truncated": True, "pages": {},
+                     "pages_found": {}, "combined_text": "", "combined_html": ""}
+        self.assertEqual(refund_policy(truncated).status, "unavailable")
+        signals = [refund_policy(truncated)]
+        self.assertFalse(no_commercial_surface(signals, truncated))
+
+    def test_one_mark_of_commerce_anywhere_clears_it(self):
+        from mri.signals import commercial as sig
+
+        base = {"root_ok": True, "pages": {}, "pages_found": {}, "emails": [],
+                "links_discovered": 4, "word_count": 120,
+                "combined_text": "walks in the hills " * 30, "combined_html": ""}
+        signals = [sig.refund_policy(base), sig.terms_page(base), sig.privacy_page(base),
+                   sig.contact_page(base), sig.pricing_page(base)]
+        self.assertTrue(sig.no_commercial_surface(signals, base))
+
+        for mark, bundle in [
+            ("a price", {**base, "combined_text": base["combined_text"] + " Prints are $45."}),
+            ("a processor", {**base, "combined_html": '<script src="https://js.stripe.com/v3/">'}),
+            ("checkout language",
+             {**base, "combined_text": base["combined_text"] + " Add to cart and we ship."}),
+        ]:
+            with self.subTest(mark=mark):
+                self.assertFalse(sig.no_commercial_surface(signals, bundle))
+
+    def test_a_published_email_alone_clears_it(self):
+        """A support address is a contact channel; it scores 55, not zero."""
+        from mri.signals import commercial as sig
+
+        bundle = {"root_ok": True, "pages": {}, "pages_found": {}, "links_discovered": 4,
+                  "word_count": 120, "emails": ["help@merchant.com"],
+                  "combined_text": "walks in the hills " * 30, "combined_html": ""}
+        signals = [sig.refund_policy(bundle), sig.terms_page(bundle), sig.privacy_page(bundle),
+                   sig.contact_page(bundle), sig.pricing_page(bundle)]
+        self.assertEqual(sig.contact_page(bundle).normalized, 55)
+        self.assertFalse(sig.no_commercial_surface(signals, bundle))
+
+    def test_a_site_we_cannot_render_is_held_not_declined(self):
+        """
+        The dangerous false positive. A client-rendered app serves a shell and
+        injects everything after load; our fetcher does not run JavaScript, so
+        the shell parses to zero words and zero anchors and *every* absence the
+        conjunction looks for is guaranteed rather than observed. Holding a
+        brochure for review is a cheap mistake. Auto-declining a funded SaaS
+        because it ships on React is not.
+        """
+        result = run_against("reactco.com", fixtures.SPA_SHELL_SITE)
+        codes = {c["code"] for c in result["reason_codes"]}
+        self.assertEqual(result["evidence"]["crawl"]["word_count"], 0)
+        self.assertEqual(result["evidence"]["crawl"]["links_discovered"], 0)
+        self.assertNotIn("NO_COMMERCIAL_SURFACE", codes)
+        self.assertNotEqual(result["band"], "decline")
+
+    def test_it_needs_a_page_we_could_actually_read(self):
+        from mri.signals import commercial as sig
+
+        readable = {"root_ok": True, "pages": {}, "pages_found": {}, "emails": [],
+                    "word_count": 120, "links_discovered": 3,
+                    "combined_text": "words " * 120, "combined_html": ""}
+        signals = [sig.refund_policy(readable), sig.terms_page(readable),
+                   sig.privacy_page(readable), sig.contact_page(readable),
+                   sig.pricing_page(readable)]
+        self.assertTrue(sig.no_commercial_surface(signals, readable))
+
+        # Same site, nothing readable behind it: no text, or no links to follow.
+        self.assertFalse(sig.no_commercial_surface(
+            signals, {**readable, "word_count": 0, "combined_text": ""}))
+        self.assertFalse(sig.no_commercial_surface(
+            signals, {**readable, "links_discovered": 0}))
+
+    def test_an_unreachable_site_is_not_double_counted(self):
+        from mri.signals.commercial import no_commercial_surface
+
+        self.assertFalse(no_commercial_surface([], {"root_ok": False}))
 
 
 class TestParkedDomain(unittest.TestCase):
@@ -490,6 +672,24 @@ class TestPolicyIntegrity(unittest.TestCase):
         self.assertEqual(max(commercial, key=commercial.get), "refund_policy")
         others = [w for k, w in commercial.items() if k != "refund_policy"]
         self.assertGreaterEqual(commercial["refund_policy"], 2 * max(others))
+
+    def test_content_depth_is_the_costly_signal_in_its_category(self):
+        """
+        The expensive signal has to outweigh the cheap ones, or a shell site
+        scores well on liveness for serving a page at all. It carries the same
+        40% of its category that refund policy carries of its own, and stops
+        there: a proxy for effort must not outrank a direct predictor of
+        chargebacks.
+        """
+        liveness = {k: w for k, (c, w, _) in policy.SIGNAL_SPEC.items()
+                    if c == "site_liveness"}
+        self.assertEqual(max(liveness, key=liveness.get), "content_depth")
+        cheap = sum(w for k, w in liveness.items() if k != "content_depth")
+        self.assertGreaterEqual(liveness["content_depth"] * 2, cheap)
+        self.assertLessEqual(
+            liveness["content_depth"],
+            policy.SIGNAL_SPEC["refund_policy"][1],
+            "refund policy is the heaviest single signal in the policy")
 
     def test_every_band_covers_its_stated_range(self):
         for score, expected in [(100, "auto_approve"), (80, "auto_approve"),

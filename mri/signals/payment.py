@@ -52,7 +52,60 @@ CANCELLATION_PATTERNS = [
 ]
 _CANCELLATION_RE = re.compile("|".join(CANCELLATION_PATTERNS), re.I)
 
+# Language that only appears when a site is actually trying to take money. Kept
+# deliberately transactional: a nav link reading "Shop" over a page that says
+# "coming soon" is not a checkout, and treating it as one is how a brochure gets
+# credited with a payment surface it does not have.
+CHECKOUT_PATTERNS = [
+    r"add\s+to\s+(cart|bag|basket)", r"\bcheckout\b", r"\bbuy\s+now\b", r"shopping\s+cart",
+    r"\border\s+now\b", r"proceed\s+to\s+(payment|checkout)", r"\bsubscribe\b",
+    r"start\s+(your\s+)?(free\s+)?trial", r"book\s+(a\s+)?(demo|call)", r"\bget\s+started\b",
+    r"request\s+(a\s+)?quote", r"contact\s+sales", r"\bplace\s+(your\s+)?order\b",
+    r"\bpay\s+now\b", r"\bview\s+plans?\b",
+]
+_CHECKOUT_RE = re.compile("|".join(CHECKOUT_PATTERNS), re.I)
+
 HIGH_TICKET_THRESHOLD = 2000
+
+
+def commercial_surface(bundle: dict) -> dict:
+    """
+    Is there any evidence at all that this site can take money?
+
+    Four independent marks: a published price, a processor fingerprint in the
+    page source, transactional language in the copy, and a pricing page. A site
+    carrying none of the four does not have a cheap commercial surface or a
+    hidden one — it has none, and the signals that describe *how* it charges
+    have nothing to describe.
+
+    This is the shared definition behind three things: whether a missing price
+    reads as enterprise sales or as nothing for sale, whether the absence of
+    subscription wording is a billing model or an absence of billing, and the
+    NO_COMMERCIAL_SURFACE finding itself.
+    """
+    text = bundle.get("combined_text", "")
+    html = bundle.get("combined_html", "")
+    pages = bundle.get("pages") or {}
+    found = bundle.get("pages_found") or {}
+
+    prices = _extract_prices(text)
+    processors = [name for name, rx in _PROCESSOR_RE.items() if rx.search(html)]
+    checkout = _CHECKOUT_RE.search(text)
+
+    marks = {
+        "price": bool(prices),
+        "processor": bool(processors),
+        "checkout": bool(checkout),
+        "pricing_page": "pricing" in pages or "pricing" in found,
+    }
+    return {
+        "marks": marks,
+        "any": any(marks.values()),
+        "present": sorted(k for k, v in marks.items() if v),
+        "prices": prices,
+        "processors": processors,
+        "checkout_phrase": checkout.group(0).strip() if checkout else "",
+    }
 
 
 def processor(bundle: dict) -> "Signal":
@@ -98,11 +151,24 @@ def price_point(bundle: dict) -> "Signal":
     text = bundle.get("combined_text", "")
     prices = _extract_prices(text)
     if not prices:
-        # Not neutral. An applicant for payment processing that publishes no
-        # price anywhere gives us nothing to size the exposure against.
-        return ok("price_point", "no price found", 40,
-                  "No price is published anywhere on the crawled pages, so there is nothing to size this merchant's ticket exposure against.",
-                  prices_found=0)
+        # Not neutral, and how far from neutral depends on what else is there.
+        # A site with a pricing page, a processor or a "contact sales" button and
+        # no number on it is an enterprise merchant quoting privately; we cannot
+        # size the ticket, but somebody is plainly selling something. A site with
+        # no price, no pricing page, no processor and no checkout language is not
+        # withholding a number — it has nothing to charge for, and 40/100 for
+        # that was the engine crediting an applicant for the absence of evidence.
+        surface = commercial_surface(bundle)
+        if surface["any"]:
+            return ok("price_point", "no price found", 40,
+                      "No price is published anywhere on the crawled pages, so there is nothing to size "
+                      f"this merchant's ticket exposure against, though the site does sell "
+                      f"({', '.join(surface['present'])}).",
+                      prices_found=0, surface=surface["present"])
+        return ok("price_point", "nothing offered for sale", 15,
+                  "No price, no pricing page, no processor and no checkout language appears anywhere on "
+                  "the crawled pages. There is no ticket to size because nothing on this site is for sale.",
+                  ["NO_PRICE_PUBLISHED"], prices_found=0, surface=[])
 
     highest = max(prices)
     if highest <= 100:
@@ -132,9 +198,22 @@ def recurring_billing(bundle: dict) -> "Signal":
     recurring_match = _RECURRING_RE.search(text)
 
     if not recurring_match:
+        # "No subscription wording" is only evidence of a one-time billing model
+        # if there is a billing model at all. On a site that offers nothing for
+        # sale there is no recurrence question to answer, and answering it anyway
+        # paid a brochure site three of its four payment-surface points for
+        # having no checkout. Abstain instead: an unmeasurable signal leaves the
+        # denominator rather than scoring, which is this engine's whole contract.
+        surface = commercial_surface(bundle)
+        if not surface["any"]:
+            return unavailable("recurring_billing",
+                               "The site offers nothing for sale — no price, no pricing page, no processor "
+                               "and no checkout language — so there is no billing model to describe as "
+                               "recurring or one-time.",
+                               raw="no billing surface")
         return ok("recurring_billing", "one-time", 75,
                   "No recurring billing language appears on the site, so this reads as one-time purchases with no renewal disputes.",
-                  recurring=False)
+                  recurring=False, surface=surface["present"])
 
     has_cancellation = bool(_CANCELLATION_RE.search(text)) or "refund" in bundle.get("pages", {})
     if has_cancellation:

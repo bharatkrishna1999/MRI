@@ -151,13 +151,128 @@ PAYMENTS_PLATFORM_SITE = {
     "https://payflow.com/blog": _page("Blog", f"<h1>Blog</h1><p>{FILLER}</p>"),
 }
 
+# ── The shape that produced the false hold this policy version exists to fix ──
+# A live page on a clean TLD with a valid certificate, a fast first byte and no
+# parking template — and nothing else. No refund page, no terms, no privacy, no
+# contact, no prices, no processor, and 125 words that never say what is being
+# sold. Under v1.1 the freebies averaged the emptiness away and it scored 47.2,
+# a hold. It is not a marginal merchant; there is no merchant.
+BROCHURE_SITE = {
+    "https://brochure.in/": _page("Cogreen", """
+      <h1>Hiking the mountains</h1>
+      <p>We are hiking the mountains of Assam and Darjeeling. Our guided treks take small
+      groups through tea gardens, cloud forest and ridge lines above the valley. Walk the old
+      bridle paths and watch the sun come up over the range. In the lower hills we run shorter
+      walks, staying in village homes and small guest houses along the way. Every trek is led
+      by guides who grew up on these trails and know the weather, the river crossings and the
+      best places to stop for tea. Groups are kept small. Seasons run from October through
+      April when the skies are clear and the ridges are open. Come walk with us.</p>
+      <a href="/shop">Shop</a><a href="/gallery">Gallery</a>""",
+      description="We are Hiking the Mountains of Assam and Darjeeling"),
+    "https://brochure.in/gallery": _page("Gallery", "<h1>Gallery</h1><p>Photographs from the trail.</p>"),
+}
+
+# ── Thin on words, but unmistakably a shop ───────────────────────────────────
+# The counter-case to the one above, and the reason the fix is a conjunction
+# rather than a word count. A one-page store says very little and still sells:
+# real prices, a real processor, a real refund policy. It must not be swept up.
+SMALL_SHOP_SITE = {
+    "https://tinyshop.com/": _page("Ridgeline Prints — hand-pulled screen prints", """
+      <a href="/refunds">Refunds</a><a href="/terms">Terms</a>
+      <a href="/privacy">Privacy</a><a href="/contact">Contact</a>
+      <h1>Ridgeline Prints</h1>
+      <p>Hand-pulled screen prints, made to order. Prints are $45. Framed prints are $90.
+      Add to cart and we ship within a week.</p>
+      <script src="https://js.stripe.com/v3/"></script>
+      <footer>© 2016 Ridgeline Prints · hello@tinyshop.com</footer>""",
+      description="Hand-pulled screen prints, made to order, from $45."),
+    "https://tinyshop.com/refunds": _page("Refunds", f"""
+      <h1>Refunds</h1><p>Return any print within 30 days for a full refund.</p>
+      <p>{POLICY_FILLER}</p>"""),
+    "https://tinyshop.com/terms": _page("Terms", f"<h1>Terms</h1><p>{POLICY_FILLER}</p>"),
+    "https://tinyshop.com/privacy": _page("Privacy", f"<h1>Privacy</h1><p>{POLICY_FILLER}</p>"),
+    "https://tinyshop.com/contact": _page("Contact", """
+      <h1>Contact</h1><p>Email hello@tinyshop.com and we reply within a day.
+      Studio address: 4 Mill Lane, Hebden Bridge.</p>"""),
+}
+
+# ── A real business in a vertical the taxonomy simply does not carry ─────────
+# Writes at length, publishes every policy page, takes payments — and still
+# matches no category, because guided trekking is not on the acceptance ladder.
+# That is a gap in our taxonomy, not a finding against the merchant, and it must
+# keep scoring as one.
+UNLISTED_VERTICAL_SITE = {
+    "https://trailco.com/": _page("Trailco — guided ridge walks", f"""
+      {NAV}
+      <h1>Trailco</h1>
+      <p>Trailco has run guided ridge walks since 2009. Book a demo of the route planner or
+      browse departures. Walks from $450 per person.</p>
+      <p>{FILLER}</p>
+      <script src="https://js.stripe.com/v3/"></script>
+      <footer>© 2009 Trailco Ltd · walk@trailco.com</footer>"""),
+    "https://trailco.com/pricing": _page("Departures", f"""
+      <h1>Departures</h1><p>Four-day ridge walk $450. Eight-day traverse $890.</p>
+      <p>{FILLER}</p>"""),
+    "https://trailco.com/legal/terms": _page("Terms", f"<h1>Terms</h1><p>{POLICY_FILLER}</p>"),
+    "https://trailco.com/legal/privacy": _page("Privacy", f"<h1>Privacy</h1><p>{POLICY_FILLER}</p>"),
+    "https://trailco.com/legal/refunds": _page("Refunds", f"""
+      <h1>Refunds</h1><p>Cancel up to 30 days before departure for a full refund.</p>
+      <p>{POLICY_FILLER}</p>"""),
+    "https://trailco.com/contact": _page("Contact", """
+      <h1>Contact</h1><p>Email walk@trailco.com. Office: 2 Fell Road, Keswick.
+      Our team answers within one business day.</p>"""),
+    "https://trailco.com/docs": _page("Route notes", f"<h1>Route notes</h1><p>{FILLER}</p>"),
+    "https://trailco.com/blog": _page("Journal", f"<h1>Journal</h1><p>{FILLER}</p>"),
+}
+
+# ── A real merchant our fetcher cannot render ────────────────────────────────
+# Client-rendered application: the static HTML is a shell, and every word of
+# copy, every nav link and every policy link is injected by JavaScript after
+# load. We do not run JavaScript, so this parses to zero words and zero anchors.
+# Every absence the policy looks for is then guaranteed rather than observed,
+# which is why the empty-storefront finding must not fire on it.
+SPA_SHELL_SITE = {
+    "https://reactco.com/": (
+        '<!doctype html><html><head><title>Nimbus</title>'
+        '<link rel="stylesheet" href="/assets/index-4a2f.css">'
+        '</head><body><div id="root"></div>'
+        '<script type="module" src="/assets/index-9c1b.js"></script>'
+        '</body></html>'),
+}
+
 SITES = {
     "goodsaas.com": GOOD_SITE,
+    "reactco.com": SPA_SHELL_SITE,
+    "brochure.in": BROCHURE_SITE,
+    "tinyshop.com": SMALL_SHOP_SITE,
+    "trailco.com": UNLISTED_VERTICAL_SITE,
     "shellco.top": SHELL_SITE,
     "parkedthing.com": PARKED_SITE,
     "tokenlaunch.xyz": RESTRICTED_SITE,
     "payflow.com": PAYMENTS_PLATFORM_SITE,
 }
+
+
+def days_ago(days: int) -> str:
+    """
+    RDAP timestamps for fixtures, relative to now.
+
+    Domain age is scored against the clock, so a hardcoded creation date is a
+    test that passes until it silently does not: the shell fixture was written
+    with a date inside the 30-day bust-out window and started failing the day it
+    aged out of it.
+    """
+    import datetime
+
+    return (datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+
+
+def days_ahead(days: int) -> str:
+    import datetime
+
+    return (datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
 
 
 def rdap(created: str, expires: str, privacy: bool = False, registrar: str = "Example Registrar") -> dict:

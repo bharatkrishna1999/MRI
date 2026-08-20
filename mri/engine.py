@@ -311,6 +311,21 @@ def evaluate(domain_input: str, declared: Declared | None = None,
             if code not in codes:
                 codes.append(code)
 
+    # One finding the weighted average cannot express, because it is a statement
+    # about the signals jointly rather than about any one of them: the crawl read
+    # the whole site and found nothing being sold. See
+    # commercial.no_commercial_surface for what it takes to trip and how narrow
+    # that is.
+    if sig_commercial.no_commercial_surface(signals, evidence.crawl or {}):
+        with trace.step("signals", "Cross-signal check: commercial surface",
+                        "five policy pages, the processor fingerprint, the price scan and the "
+                        "checkout language, read together rather than averaged") as step:
+            step["status"] = "warn"
+            step["detail"] = ("no policy page, no processor, no price and no checkout language — "
+                              "NO_COMMERCIAL_SURFACE")
+        if "NO_COMMERCIAL_SURFACE" not in codes:
+            codes.append("NO_COMMERCIAL_SURFACE")
+
     if scoring["confidence"] < CONFIDENCE_FLOOR and "LOW_CONFIDENCE" not in codes:
         codes.append("LOW_CONFIDENCE")
 
