@@ -13,6 +13,12 @@ from __future__ import annotations
 
 from .base import ok, unavailable
 
+# Below this the homepage did not parse into anything worth calling content, and
+# the likeliest reason is a client-rendered app our fetcher cannot execute rather
+# than a merchant with nothing to say. Matches the floor content_depth already
+# uses to call a page a placeholder.
+READABLE_WORD_FLOOR = 50
+
 # key -> (signal key, human noun, reason code, minimum words to count as real)
 PAGE_SIGNALS = {
     "refund":  ("refund_policy",  "refund or cancellation policy", "NO_REFUND_POLICY", 60),
@@ -95,14 +101,25 @@ def no_commercial_surface(signals: list, bundle: dict) -> bool:
     brochure site keeps the free points that a valid certificate, a fast first
     byte and an unparked homepage hand to any domain bought this morning.
 
-    The conjunction is deliberately unforgiving in what it requires and
-    deliberately narrow in when it can fire:
+    This caps at decline on its own, so what it takes to trip matters more than
+    what it does once tripped. Three guards, and every one of them exists to
+    keep "we could not read this site" from being mistaken for "this site has
+    nothing on it":
 
-    * The crawl must have *looked*. Every one of the five page signals has to
+    * **The crawl must have read a page.** A client-rendered application serves
+      a static shell — `<div id="root"></div>` and a script tag — and injects
+      every word of copy, every nav link and every policy link after load. Our
+      fetcher does not run JavaScript, so that shell parses to zero words and
+      zero anchors, and *every* absence below is then guaranteed rather than
+      observed. Requiring readable text and at least one internal link is what
+      separates a merchant who published nothing from an app we cannot render.
+      Without this guard a funded SaaS on React declines automatically, which is
+      a far worse error than holding a brochure for review.
+    * **The crawl must have looked.** Every one of the five page signals has to
       have scored zero, meaning it searched the site's links and found nothing.
       A crawl that ran out of budget leaves those signals unavailable instead,
       and unavailable never trips this.
-    * A single mark of commerce anywhere clears it. One published price, one
+    * **One mark of commerce anywhere clears it.** One published price, one
       processor fingerprint, one "add to cart", one pricing page, or a support
       address on the homepage (which scores the contact page at 55, not zero)
       and this does not fire.
@@ -117,6 +134,13 @@ def no_commercial_surface(signals: list, bundle: dict) -> bool:
 
     if not bundle.get("root_ok"):
         return False  # SITE_UNREACHABLE covers this; do not double-count it.
+
+    # Did we actually read a site, or just fail to render one? "No refund policy
+    # found in 0 internal links" is not a finding about the merchant.
+    if bundle.get("word_count", 0) < READABLE_WORD_FLOOR:
+        return False
+    if bundle.get("links_discovered", 0) < 1:
+        return False
 
     by_key = {s.key: s for s in signals}
     for _, (signal_key, _, _, _) in PAGE_SIGNALS.items():

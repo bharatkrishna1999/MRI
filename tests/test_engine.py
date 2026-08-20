@@ -331,15 +331,17 @@ class TestEmptyStorefrontIsNarrowlyDrawn(unittest.TestCase):
         from mri.signals import commercial as sig
 
         base = {"root_ok": True, "pages": {}, "pages_found": {}, "emails": [],
-                "links_discovered": 4, "combined_text": "", "combined_html": ""}
+                "links_discovered": 4, "word_count": 120,
+                "combined_text": "walks in the hills " * 30, "combined_html": ""}
         signals = [sig.refund_policy(base), sig.terms_page(base), sig.privacy_page(base),
                    sig.contact_page(base), sig.pricing_page(base)]
         self.assertTrue(sig.no_commercial_surface(signals, base))
 
         for mark, bundle in [
-            ("a price", {**base, "combined_text": "Prints are $45."}),
+            ("a price", {**base, "combined_text": base["combined_text"] + " Prints are $45."}),
             ("a processor", {**base, "combined_html": '<script src="https://js.stripe.com/v3/">'}),
-            ("checkout language", {**base, "combined_text": "Add to cart and we ship."}),
+            ("checkout language",
+             {**base, "combined_text": base["combined_text"] + " Add to cart and we ship."}),
         ]:
             with self.subTest(mark=mark):
                 self.assertFalse(sig.no_commercial_surface(signals, bundle))
@@ -349,11 +351,45 @@ class TestEmptyStorefrontIsNarrowlyDrawn(unittest.TestCase):
         from mri.signals import commercial as sig
 
         bundle = {"root_ok": True, "pages": {}, "pages_found": {}, "links_discovered": 4,
-                  "emails": ["help@merchant.com"], "combined_text": "", "combined_html": ""}
+                  "word_count": 120, "emails": ["help@merchant.com"],
+                  "combined_text": "walks in the hills " * 30, "combined_html": ""}
         signals = [sig.refund_policy(bundle), sig.terms_page(bundle), sig.privacy_page(bundle),
                    sig.contact_page(bundle), sig.pricing_page(bundle)]
         self.assertEqual(sig.contact_page(bundle).normalized, 55)
         self.assertFalse(sig.no_commercial_surface(signals, bundle))
+
+    def test_a_site_we_cannot_render_is_held_not_declined(self):
+        """
+        The dangerous false positive. A client-rendered app serves a shell and
+        injects everything after load; our fetcher does not run JavaScript, so
+        the shell parses to zero words and zero anchors and *every* absence the
+        conjunction looks for is guaranteed rather than observed. Holding a
+        brochure for review is a cheap mistake. Auto-declining a funded SaaS
+        because it ships on React is not.
+        """
+        result = run_against("reactco.com", fixtures.SPA_SHELL_SITE)
+        codes = {c["code"] for c in result["reason_codes"]}
+        self.assertEqual(result["evidence"]["crawl"]["word_count"], 0)
+        self.assertEqual(result["evidence"]["crawl"]["links_discovered"], 0)
+        self.assertNotIn("NO_COMMERCIAL_SURFACE", codes)
+        self.assertNotEqual(result["band"], "decline")
+
+    def test_it_needs_a_page_we_could_actually_read(self):
+        from mri.signals import commercial as sig
+
+        readable = {"root_ok": True, "pages": {}, "pages_found": {}, "emails": [],
+                    "word_count": 120, "links_discovered": 3,
+                    "combined_text": "words " * 120, "combined_html": ""}
+        signals = [sig.refund_policy(readable), sig.terms_page(readable),
+                   sig.privacy_page(readable), sig.contact_page(readable),
+                   sig.pricing_page(readable)]
+        self.assertTrue(sig.no_commercial_surface(signals, readable))
+
+        # Same site, nothing readable behind it: no text, or no links to follow.
+        self.assertFalse(sig.no_commercial_surface(
+            signals, {**readable, "word_count": 0, "combined_text": ""}))
+        self.assertFalse(sig.no_commercial_surface(
+            signals, {**readable, "links_discovered": 0}))
 
     def test_an_unreachable_site_is_not_double_counted(self):
         from mri.signals.commercial import no_commercial_surface

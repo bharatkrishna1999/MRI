@@ -225,8 +225,24 @@ UNLISTED_VERTICAL_SITE = {
     "https://trailco.com/blog": _page("Journal", f"<h1>Journal</h1><p>{FILLER}</p>"),
 }
 
+# ── A real merchant our fetcher cannot render ────────────────────────────────
+# Client-rendered application: the static HTML is a shell, and every word of
+# copy, every nav link and every policy link is injected by JavaScript after
+# load. We do not run JavaScript, so this parses to zero words and zero anchors.
+# Every absence the policy looks for is then guaranteed rather than observed,
+# which is why the empty-storefront finding must not fire on it.
+SPA_SHELL_SITE = {
+    "https://reactco.com/": (
+        '<!doctype html><html><head><title>Nimbus</title>'
+        '<link rel="stylesheet" href="/assets/index-4a2f.css">'
+        '</head><body><div id="root"></div>'
+        '<script type="module" src="/assets/index-9c1b.js"></script>'
+        '</body></html>'),
+}
+
 SITES = {
     "goodsaas.com": GOOD_SITE,
+    "reactco.com": SPA_SHELL_SITE,
     "brochure.in": BROCHURE_SITE,
     "tinyshop.com": SMALL_SHOP_SITE,
     "trailco.com": UNLISTED_VERTICAL_SITE,

@@ -62,9 +62,15 @@ independent findings for a weighted average to thin out against each other; they
 are one finding — nobody is selling anything here — observed eight ways.
 Averaging correlated evidence is how a live page with a valid certificate and a
 fast first byte keeps the free points that any domain bought this morning earns.
-It fires only when the crawl actually looked and found all of it absent: a crawl
-that ran out of budget leaves those signals *unavailable*, and unavailable never
-trips it, so an upstream timeout can never manufacture a decline.
+It fires only when the crawl actually read a page and looked. A crawl that ran
+out of budget leaves those signals *unavailable*, and unavailable never trips
+it. Neither does a page that parsed to nothing: a client-rendered application
+serves a static shell and injects its copy, its nav and its policy links after
+load, and since the fetcher does not run JavaScript, every absence would be
+guaranteed rather than observed. Requiring readable text and at least one
+internal link is what separates a merchant who published nothing from an app we
+cannot render — holding a brochure for review is a cheap mistake, auto-declining
+a funded SaaS because it ships on React is not.
 
 A restricted category is the only finding here that declines on the engine's own
 reading of a page, so it has to earn it. The inference runs on the pages that
