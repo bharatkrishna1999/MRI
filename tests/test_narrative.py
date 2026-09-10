@@ -13,6 +13,8 @@ import sys
 import unittest
 from unittest import mock
 
+import httpx
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("MRI_DB_PATH", "/tmp/mri-test.db")
 os.environ.setdefault("MRI_SKIP_WARM", "1")
@@ -378,6 +380,174 @@ class TestGeminiRequestShape(unittest.TestCase):
         self.assertNotIn("model", out)
         self.assertEqual(out["written_by"], "engine")
         self.assertEqual(out["business"]["paragraph"], engine_paragraph)
+
+
+class TestFreeTierModelFallback(unittest.TestCase):
+    """
+    Free tiers retire names and run out of daily requests. Either one used to be
+    the end of the rewrite for the rest of the day: a single 404 or 429, and the
+    page showed the engine's own prose with a byline that did not say why.
+    """
+
+    def setUp(self):
+        # Discovery caches its answer for the life of the process. Clear it so
+        # one test cannot decide the next one's candidate list.
+        llm._discovered_model = None
+        self.addCleanup(setattr, llm, "_discovered_model", None)
+
+    def reply(self, text='{"business": "A shop.", "why": "It was fine."}'):
+        return httpx.Response(
+            200, json={"candidates": [{"content": {"parts": [{"text": text}]}}]},
+            request=httpx.Request("POST", "https://example.test"))
+
+    def error(self, status, body):
+        return httpx.Response(status, text=body,
+                              request=httpx.Request("POST", "https://example.test"))
+
+    def run_with(self, responder):
+        """Drive a full narrate() with `responder(model) -> httpx.Response`."""
+        called = []
+
+        def fake_post(url, **kwargs):
+            model = url.rsplit("/", 1)[-1].split(":")[0]
+            called.append(model)
+            return responder(model)
+
+        summary, result = TestOptionalModelLayer().summary_and_result()
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm.httpx.post", side_effect=fake_post):
+            out = llm.narrate(summary, result)
+        return out, called
+
+    def test_the_default_is_a_model_the_free_tier_still_serves(self):
+        # Google cut the free allowances in December 2025. The flagship flash
+        # model kept a daily count a demo can spend in an afternoon; the lite
+        # model kept a usable one, and this is a rewriting job either way.
+        self.assertEqual(llm.GEMINI_MODEL, "gemini-2.5-flash-lite")
+        self.assertIn("gemini-2.5-flash-lite", llm._gemini_candidates())
+
+    def test_a_retired_model_name_falls_through_to_the_next(self):
+        out, called = self.run_with(
+            lambda model: self.error(404, "models/%s is not found" % model)
+            if model == llm.GEMINI_MODEL else self.reply())
+        self.assertEqual(out["model"]["business"], "A shop.")
+        self.assertGreaterEqual(len(called), 2)
+        # And the byline names the model that actually answered, not the one
+        # that was asked for first and 404ed.
+        self.assertEqual(out["model"]["model"], called[-1])
+        self.assertNotEqual(out["model"]["model"], llm.GEMINI_MODEL)
+
+    def test_a_spent_daily_allowance_falls_through_too(self):
+        # A quota is counted per model, so the next name has its own.
+        out, called = self.run_with(
+            lambda model: self.error(429, "RESOURCE_EXHAUSTED: quota exceeded")
+            if model == llm.GEMINI_MODEL else self.reply())
+        self.assertEqual(out["model"]["business"], "A shop.")
+        self.assertEqual(out["model"]["model"], called[-1])
+
+    def test_a_bad_key_is_reported_once_rather_than_tried_on_every_model(self):
+        out, called = self.run_with(
+            lambda model: self.error(400, "API key not valid. Please pass a valid API key."))
+        self.assertEqual(len(called), 1)
+        self.assertNotIn("model", out)
+        self.assertIn("API key not valid", out["model_error"])
+
+    def test_a_stale_list_asks_the_key_what_it_can_call(self):
+        listed = {
+            "models": [
+                {"name": "models/embedding-001", "supportedGenerationMethods": ["embedContent"]},
+                {"name": "models/gemini-9.9-pro", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-9.9-flash-preview",
+                 "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-9.9-flash-lite",
+                 "supportedGenerationMethods": ["generateContent"]},
+            ]
+        }
+
+        def responder(model):
+            if model == "gemini-9.9-flash-lite":
+                return self.reply()
+            return self.error(404, "not found")
+
+        def fake_get(url, **kwargs):
+            return httpx.Response(200, json=listed,
+                                  request=httpx.Request("GET", url))
+
+        summary, result = TestOptionalModelLayer().summary_and_result()
+
+        def fake_post(url, **kwargs):
+            return responder(url.rsplit("/", 1)[-1].split(":")[0])
+
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm.httpx.post", side_effect=fake_post), \
+             mock.patch("mri.llm.httpx.get", side_effect=fake_get):
+            out = llm.narrate(summary, result)
+
+        # Cheapest stable model that can generate text. Not the pro model, which
+        # left the free tier, and not a preview, which can be withdrawn.
+        self.assertEqual(out["model"]["model"], "gemini-9.9-flash-lite")
+
+    def test_nothing_answering_leaves_the_engine_wording_and_says_so(self):
+        def fake_get(url, **kwargs):
+            return httpx.Response(200, json={"models": []},
+                                  request=httpx.Request("GET", url))
+
+        summary, result = TestOptionalModelLayer().summary_and_result()
+        engine_paragraph = summary["business"]["paragraph"]
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm.httpx.post",
+                        side_effect=lambda url, **kw: self.error(404, "not found")), \
+             mock.patch("mri.llm.httpx.get", side_effect=fake_get):
+            out = llm.narrate(summary, result)
+
+        self.assertNotIn("model", out)
+        self.assertEqual(out["written_by"], "engine")
+        self.assertEqual(out["business"]["paragraph"], engine_paragraph)
+        self.assertIn("no Gemini model this key can call", out["model_error"])
+
+    def test_thinking_is_only_switched_off_where_the_field_exists(self):
+        # thinkingBudget belongs to the 2.5 series. Sending it to a model that
+        # does not know the field is a 400, which would have cost the rewrite.
+        self.assertTrue(llm._supports_disabled_thinking("gemini-2.5-flash-lite"))
+        self.assertFalse(llm._supports_disabled_thinking("gemini-2.0-flash"))
+
+        sent = []
+
+        def fake_post(url, **kwargs):
+            sent.append((url.rsplit("/", 1)[-1].split(":")[0], kwargs["json"]))
+            model = sent[-1][0]
+            return self.reply() if model == "gemini-2.0-flash" else self.error(404, "gone")
+
+        summary, result = TestOptionalModelLayer().summary_and_result()
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm.httpx.post", side_effect=fake_post):
+            llm.narrate(summary, result)
+
+        by_model = dict(sent)
+        self.assertIn("thinkingConfig", by_model["gemini-2.5-flash-lite"]["generationConfig"])
+        self.assertNotIn("thinkingConfig", by_model["gemini-2.0-flash"]["generationConfig"])
+        # And a model that cannot be told to stop thinking gets a bigger ceiling,
+        # because it spends part of the same budget doing it.
+        self.assertGreater(by_model["gemini-2.0-flash"]["generationConfig"]["maxOutputTokens"],
+                           by_model["gemini-2.5-flash-lite"]["generationConfig"]["maxOutputTokens"])
+
+    def test_a_model_that_rejects_the_thinking_field_is_retried_without_it(self):
+        sent = []
+
+        def fake_post(url, **kwargs):
+            sent.append(kwargs["json"]["generationConfig"])
+            if "thinkingConfig" in sent[-1]:
+                return self.error(400, "thinking is not supported by this model")
+            return self.reply()
+
+        summary, result = TestOptionalModelLayer().summary_and_result()
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm.httpx.post", side_effect=fake_post):
+            out = llm.narrate(summary, result)
+
+        self.assertEqual(out["model"]["business"], "A shop.")
+        self.assertEqual(out["model"]["model"], llm.GEMINI_MODEL)
+        self.assertNotIn("thinkingConfig", sent[-1])
 
 
 if __name__ == "__main__":

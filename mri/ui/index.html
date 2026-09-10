@@ -33,6 +33,11 @@ header .wrap{display:flex;align-items:center;justify-content:space-between;gap:1
 .hnav a{color:#c8d2e4;padding:4px 0}
 .chip-policy{font-family:var(--mono);font-size:11px;background:#1b2740;color:#8fb0ff;
   padding:4px 9px;border-radius:5px;border:1px solid #2a3a5c}
+/* Whether a model is writing the two summaries, said before a run rather than
+   inferred from a byline after one. Click it to make the app prove it. */
+.chip-ai{cursor:pointer;background:#132a1e;color:#7fd6a2;border-color:#245c3c}
+.chip-ai.off{background:#2a1b1b;color:#e0a0a0;border-color:#5c2a2a}
+.chip-ai.busy{opacity:.6;cursor:progress}
 
 .hero{padding:34px 0 24px}
 .hero h1{font-size:clamp(23px,5.4vw,30px);letter-spacing:-.6px;margin-bottom:6px;text-wrap:balance}
@@ -281,6 +286,8 @@ footer{border-top:1px solid var(--line);padding:22px 0 max(40px,env(safe-area-in
     <a href="/benchmark">Benchmark</a>
     <a href="/docs">API docs</a>
     <span class="chip-policy" id="policyChip">policy_v1.2</span>
+    <span class="chip-policy chip-ai off" id="aiChip" title="Checking whether a model is writing the summaries"
+          onclick="checkNarration()">AI …</span>
   </nav>
 </div></header>
 
@@ -463,11 +470,61 @@ fetch("/api/v1/taxonomy").then(r=>r.json()).then(d=>{
 
 fetch("/api/v1/policy").then(r=>r.json()).then(p=>{
   $("policyChip").textContent = p.policy_version;
+  renderAiChip(p.narration);
   $("footpolicy").innerHTML = `Policy <b>${p.policy_version}</b> (effective ${p.effective}) · `
     + `${p.signals.length} signals across ${Object.keys(p.category_weights).length} categories · 100 weight points · `
     + `${p.global_timeout_s}s global budget, ${p.per_call_timeout_s}s per call · decisions cached 24h and persisted to SQLite.`
-    + (p.geoip.available ? ` GeoLite2 built ${p.geoip.built}, read locally.` : "");
+    + (p.geoip.available ? ` GeoLite2 built ${p.geoip.built}, read locally.` : "")
+    + (p.narration.model_rewrite_enabled
+        ? ` Both summaries are written by the engine and then rewritten by ${esc(p.narration.model)} `
+          + `(${esc(p.narration.provider)}), after the decision is final.`
+        : ` Both summaries are written by the engine; no model rewrite is configured.`);
 });
+
+// ── Is the model layer actually live? ────────────────────────────────────
+// A key that is missing and a key that is failing produce the same page, so
+// the chip says which before a run, and one click makes the server prove it
+// with a real call against a throwaway summary.
+let NARRATION = null;
+
+function renderAiChip(n){
+  NARRATION = n || {};
+  const chip = $("aiChip");
+  if(NARRATION.model_rewrite_enabled){
+    chip.className = "chip-policy chip-ai";
+    chip.textContent = "AI " + NARRATION.model;
+    chip.title = `The two plain-English summaries are rewritten by ${NARRATION.model} `
+      + `after the decision is final. Click to make a live test call.`;
+  } else {
+    chip.className = "chip-policy chip-ai off";
+    chip.textContent = "AI off";
+    chip.title = "No model key is set, so the engine's own wording ships. "
+      + "Set GEMINI_API_KEY to switch the rewrite on. Click to re-check.";
+  }
+}
+
+function checkNarration(){
+  const chip = $("aiChip");
+  chip.classList.add("busy");
+  chip.textContent = "AI checking…";
+  fetch("/api/v1/narration/check").then(r=>r.json()).then(c=>{
+    chip.classList.remove("busy");
+    if(c.ok){
+      chip.className = "chip-policy chip-ai";
+      chip.textContent = "AI " + c.answered_model;
+      chip.title = `Live: ${c.answered_model} answered a test call just now. Sample — ${c.sample}`;
+    } else {
+      chip.className = "chip-policy chip-ai off";
+      chip.textContent = "AI unavailable";
+      chip.title = c.error || c.detail || "The model layer did not answer.";
+    }
+  }).catch(e=>{
+    chip.classList.remove("busy");
+    chip.className = "chip-policy chip-ai off";
+    chip.textContent = "AI unavailable";
+    chip.title = String(e);
+  });
+}
 
 // ── T8: three prefilled demos, warmed at startup ─────────────────────────
 fetch("/api/v1/demos").then(r=>r.json()).then(d=>{

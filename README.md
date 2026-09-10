@@ -137,11 +137,26 @@ smoother, set one key and a model rewrites them:
 GEMINI_API_KEY=...        # Google AI Studio — free tier, no card, no billing account
 ```
 
-**Google Gemini's free tier is the recommendation** — `gemini-2.5-flash` through
-Google AI Studio. A key is issued in about a minute at
+**Google Gemini's free tier is the recommendation** — `gemini-2.5-flash-lite`
+through Google AI Studio. A key is issued in about a minute at
 [aistudio.google.com](https://aistudio.google.com/apikey), the free tier needs
-no billing account, and its daily allowance is far more than a demo will ever
-spend. It is also fast enough to sit in a request. Two alternatives, in order:
+no billing account, and no card is asked for. The lite model rather than the
+flagship one on purpose: Google cut the free allowances in December 2025, and
+`gemini-2.5-flash` came out of it with a daily request count a demo can spend in
+an afternoon, while `gemini-2.5-flash-lite` kept a usable one. Rewriting two
+paragraphs the engine has already written needs no more than that, and the lite
+model is faster, which matters when the call sits inside a request.
+
+Names go stale and daily allowances run out, so a single model is not relied on.
+The configured model is tried first, then `gemini-2.5-flash-lite`,
+`gemini-2.5-flash` and `gemini-2.0-flash`; a 404 or a 429 moves to the next name
+rather than ending the rewrite for the day. If every one of them 404s — which
+means this list has gone stale against whatever Google is serving — the key is
+asked which models it can actually call and the cheapest stable text model is
+used. The byline on the page names the model that answered, not the one asked
+for first.
+
+Two alternatives, in order:
 Groq's free tier (`llama-3.3-70b-versatile`, faster than anything else on this
 list) and OpenRouter's free model pool. Both speak the OpenAI API, so either
 works through:
@@ -154,7 +169,7 @@ A local Ollama works the same way with `MRI_LLM_BASE_URL=http://localhost:11434/
 though a free 512 MB hosting tier will not run one.
 
 `MRI_LLM_MODEL` names the model on that OpenAI-compatible path only. The Gemini
-path reads `MRI_GEMINI_MODEL`, and defaults to `gemini-2.5-flash` — the two are
+path reads `MRI_GEMINI_MODEL`, and defaults to `gemini-2.5-flash-lite` — the two are
 deliberately separate, so a value set for Groq is never sent to Google as the
 model to run. Reasoning is switched off explicitly on the Gemini call: the 2.5
 series spends reasoning tokens out of the same allowance as the answer, and a
@@ -185,6 +200,13 @@ Four rules hold whichever provider is configured:
   a badly written paragraph next to a decision it did not touch.
 
 Check what a running instance is using at `/api/v1/policy` under `narration`.
+The header of the result page carries the same thing as a chip — the model
+writing the summaries, or `AI off` when no key is set — and clicking it calls
+`/api/v1/narration/check`, which makes one real call against a throwaway summary
+and reports which model answered or the exact error that stopped it. It touches
+no merchant and writes no audit row. That endpoint exists because a key that is
+missing and a key that is failing otherwise produce an identical page.
+
 The benchmark harness passes `narrate=False`: sixty domains is sixty model calls
 for prose nobody reads.
 
@@ -312,6 +334,7 @@ GET  /api/v1/evaluate?domain=example.com      full structured decision
 POST /api/v1/evaluate                         {"domain": "...", "advanced": {...}}
 GET  /api/v1/evaluate/stream?domain=...       the same run, narrated over SSE
 GET  /api/v1/policy                           weights, bands, reason codes, taxonomy
+GET  /api/v1/narration/check                  one live test call to the model layer
 GET  /api/v1/audit/recent                     last N decisions
 GET  /api/v1/audit/{id}                       replay one decision
 GET  /api/v1/benchmark/results                metrics from the last benchmark run

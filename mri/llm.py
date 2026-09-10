@@ -22,9 +22,15 @@ to a decision it did not touch.
 
 Providers, in the order they are tried:
 
-  GEMINI_API_KEY        Google AI Studio. Free tier, no card, generous limits.
+  GEMINI_API_KEY        Google AI Studio. Free tier, no card, no billing account.
   MRI_LLM_API_KEY       any OpenAI-compatible endpoint, with MRI_LLM_BASE_URL —
                         Groq, OpenRouter, Together, or a local Ollama.
+
+The Gemini path is written for a free tier rather than a paid one, because a
+free tier retires model names and runs out of daily requests and a paid one does
+neither. A 404 or a 429 moves to the next model in the list instead of ending
+the rewrite for the day, and if the whole list has gone stale the key is asked
+what it can actually call.
 """
 from __future__ import annotations
 
@@ -37,8 +43,28 @@ import httpx
 # The Gemini path reads its own variable. MRI_LLM_MODEL belongs to the
 # OpenAI-compatible path below, and sharing one name between the two meant a key
 # set for Groq could be handed to Gemini as the model to run.
-GEMINI_MODEL = os.environ.get("MRI_GEMINI_MODEL", "gemini-2.5-flash")
+#
+# The default is the free tier's workhorse, not its flagship. Google cut the
+# free allowances in December 2025 and gemini-2.5-flash came out of it with a
+# daily count a demo can exhaust in an afternoon; gemini-2.5-flash-lite kept the
+# largest free daily allowance of the generally available models and is fast
+# enough to sit inside a request, which is the whole requirement here — this is
+# a rewriting job, not a reasoning one.
+GEMINI_MODEL = os.environ.get("MRI_GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+# Tried in order after the configured model, so a model that has been retired,
+# renamed or had its free allowance spent for the day costs one HTTP round trip
+# rather than the whole feature. A quota is per model, so the step down to the
+# next one is worth taking.
+GEMINI_FALLBACKS = ("gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash")
+
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# Filled in only if every name above 404s, which means the list has gone stale
+# against whatever Google is serving. Asking the key what it can call beats
+# hardcoding another guess. Held for the life of the process.
+_discovered_model: str | None = None
 
 # A model that has not answered in this long is a model we are not waiting for.
 # This budget sits outside the 8 second underwriting deadline; the decision is
@@ -71,7 +97,10 @@ Reply with only a JSON object: {"business": "...", "why": "..."}"""
 def configured() -> dict:
     """Which provider, if any, is set up. Safe to call anywhere — reads env only."""
     if os.environ.get("GEMINI_API_KEY"):
-        return {"enabled": True, "provider": "gemini", "model": GEMINI_MODEL}
+        return {"enabled": True, "provider": "gemini",
+                "model": _discovered_model or GEMINI_MODEL,
+                "fallbacks": [m for m in _gemini_candidates()
+                              if m != (_discovered_model or GEMINI_MODEL)]}
     if os.environ.get("MRI_LLM_API_KEY") and os.environ.get("MRI_LLM_BASE_URL"):
         return {
             "enabled": True,
@@ -143,26 +172,103 @@ def _parse(text: str) -> dict | None:
     return {"business": business[:2000], "why": why[:2000]}
 
 
-def _call_gemini(prompt: str) -> str:
+class _ModelUnavailable(Exception):
+    """
+    This model cannot serve the call — retired, renamed, not on the key's tier,
+    or its free allowance is spent for the day. Every one of those is answered
+    by trying the next name rather than by giving up on the rewrite.
+    """
+
+
+def _gemini_candidates() -> list[str]:
+    """The configured model first, then the fallbacks, then anything discovered."""
+    ordered = [GEMINI_MODEL, *GEMINI_FALLBACKS, _discovered_model]
+    seen, out = set(), []
+    for model in ordered:
+        if model and model not in seen:
+            seen.add(model)
+            out.append(model)
+    return out
+
+
+def _discover_gemini_model(key: str) -> str | None:
+    """
+    Ask the key which models it can actually call, and take the cheapest one
+    that can generate text. Reached only when every hardcoded name has 404ed,
+    so it is the difference between a stale list and no rewrite at all.
+    """
+    global _discovered_model
+    response = httpx.get(GEMINI_LIST_URL, headers={"x-goog-api-key": key},
+                         timeout=TIMEOUT_S)
+    response.raise_for_status()
+    names = [
+        (model.get("name") or "").split("/")[-1]
+        for model in response.json().get("models", [])
+        if "generateContent" in (model.get("supportedGenerationMethods") or [])
+    ]
+    # Cheapest first, and nothing preview or experimental: this runs unattended
+    # in front of a decision page, so a model that can be withdrawn tomorrow is
+    # worse than none. "pro" is excluded outright — it left the free tier.
+    stable = [n for n in names
+              if n and "preview" not in n and "exp" not in n and "pro" not in n]
+    for want in ("flash-lite", "flash"):
+        for name in stable:
+            if want in name:
+                _discovered_model = name
+                return name
+    return None
+
+
+def _supports_disabled_thinking(model: str) -> bool:
+    """
+    Only the 2.5 series takes thinkingBudget: 0. Sending it to a model that does
+    not know the field is a 400, and sending it to one whose reasoning cannot be
+    switched off is the same. Older models never think, so they need nothing.
+    """
+    return "2.5" in model
+
+
+def _gemini_once(prompt: str, model: str, thinking_off: bool = True) -> str:
+    """One call, one model. Raises _ModelUnavailable if the next name is worth trying."""
     key = os.environ["GEMINI_API_KEY"]
+    disable_thinking = thinking_off and _supports_disabled_thinking(model)
+    generation: dict = {
+        "temperature": 0.2,
+        # A model whose reasoning we cannot switch off spends part of this
+        # budget thinking, so it gets a larger one. See MAX_OUTPUT_TOKENS.
+        "maxOutputTokens": MAX_OUTPUT_TOKENS if disable_thinking else MAX_OUTPUT_TOKENS * 2,
+        "responseMimeType": "application/json",
+    }
+    if disable_thinking:
+        # Reasoning off. See MAX_OUTPUT_TOKENS — left on, it competes with the
+        # answer for the same budget and usually wins.
+        generation["thinkingConfig"] = {"thinkingBudget": 0}
+
     response = httpx.post(
-        GEMINI_URL.format(model=GEMINI_MODEL),
+        GEMINI_URL.format(model=model),
         headers={"x-goog-api-key": key, "content-type": "application/json"},
         json={
             "systemInstruction": {"parts": [{"text": SYSTEM}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": MAX_OUTPUT_TOKENS,
-                "responseMimeType": "application/json",
-                # Reasoning off. See MAX_OUTPUT_TOKENS — left on, it competes
-                # with the answer for the same budget and usually wins.
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
+            "generationConfig": generation,
         },
         timeout=TIMEOUT_S,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        body = (exc.response.text or "")[:300]
+        # A key that is wrong is wrong for every model. Say so once, with what
+        # Google actually said, instead of walking the whole list to find that
+        # out three more times and reporting a bare status code at the end.
+        if "api key" in body.lower():
+            raise PermissionError(f"HTTP {status} — {body}") from exc
+        if disable_thinking and status == 400 and "thinking" in body.lower():
+            return _gemini_once(prompt, model, thinking_off=False)
+        if status in (400, 404, 429):
+            raise _ModelUnavailable(f"HTTP {status} — {body}") from exc
+        raise
     payload = response.json()
 
     # A refusal, a safety stop or an exhausted token budget all come back as
@@ -178,6 +284,41 @@ def _call_gemini(prompt: str) -> str:
         raise ValueError(
             f"empty response (finishReason={candidates[0].get('finishReason') or 'none given'})")
     return text
+
+
+def _call_gemini(prompt: str, chosen: dict | None = None) -> str:
+    """
+    The Gemini path, with the free tier's habits designed for.
+
+    Names go stale and daily allowances run out, and both used to end the same
+    way: one 404 or one 429, and the page quietly showed the engine's own prose
+    for the rest of the day. Each candidate is tried in turn, and if the whole
+    list is stale the key is asked what it can call.
+
+    `chosen` is an optional dict that receives the model that actually answered,
+    so the byline on the page names that one rather than the one we asked for
+    first.
+    """
+    failures = []
+    for model in _gemini_candidates():
+        try:
+            text = _gemini_once(prompt, model)
+        except _ModelUnavailable as exc:
+            failures.append(f"{model} ({exc})")
+            continue
+        if chosen is not None:
+            chosen["model"] = model
+        return text
+
+    discovered = _discover_gemini_model(os.environ["GEMINI_API_KEY"])
+    if discovered:
+        text = _gemini_once(prompt, discovered)
+        if chosen is not None:
+            chosen["model"] = discovered
+        return text
+
+    raise _ModelUnavailable("no Gemini model this key can call answered — tried "
+                            + "; ".join(failures))
 
 
 def _call_openai_compatible(prompt: str, config: dict) -> str:
@@ -215,18 +356,22 @@ def narrate(summary: dict, result: dict, trace=None) -> dict:
         if trace is not None:
             trace.event("narrate", "Plain-English rewrite", status, detail)
 
+    # Seeded with the model we intend to call and overwritten by the one that
+    # answered, which are the same thing unless a fallback was taken.
+    chosen = {"model": config["model"]}
     try:
         prompt = _prompt(summary, result)
-        raw = (_call_gemini(prompt) if config["provider"] == "gemini"
+        raw = (_call_gemini(prompt, chosen) if config["provider"] == "gemini"
                else _call_openai_compatible(prompt, config))
         parsed = _parse(raw)
         if not parsed:
             summary["model_error"] = "the model did not return usable JSON"
             note("warn", "unusable response — the engine's own wording ships instead")
             return summary
-        summary["model"] = {**parsed, "provider": config["provider"], "model": config["model"]}
-        summary["written_by"] = f"{config['provider']}:{config['model']}"
-        note("ok", f"{config['model']} rewrote both summaries · the decision was already final")
+        answered = chosen["model"]
+        summary["model"] = {**parsed, "provider": config["provider"], "model": answered}
+        summary["written_by"] = f"{config['provider']}:{answered}"
+        note("ok", f"{answered} rewrote both summaries · the decision was already final")
     except Exception as exc:
         # Every failure is the same failure: we keep the text we already had.
         summary["model_error"] = f"{type(exc).__name__}: {exc}"
