@@ -87,6 +87,48 @@ class TestPolicyEndpoint(unittest.TestCase):
         self.assertEqual(len(bands["manual_review"]["documents"]), 3)
 
 
+class TestNarrationStatus(unittest.TestCase):
+    """
+    A key that is missing and a key that is failing render the same page. Both
+    the chip in the header and this endpoint exist so the difference is visible
+    without reading a byline on a finished run.
+    """
+
+    def test_the_policy_says_who_writes_the_summaries(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=False):
+            body = client.get("/api/v1/policy").json()["narration"]
+        self.assertTrue(body["always_written_by_engine"])
+        self.assertTrue(body["model_rewrite_enabled"])
+        self.assertEqual(body["provider"], "gemini")
+        self.assertTrue(body["model"].startswith("gemini-"))
+        self.assertTrue(body["fallback_models"])
+
+    def test_the_check_says_plainly_when_no_key_is_set(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            body = client.get("/api/v1/narration/check").json()
+        self.assertFalse(body["enabled"])
+        self.assertFalse(body["ok"])
+        self.assertIn("GEMINI_API_KEY", body["detail"])
+
+    def test_the_check_names_the_model_that_answered(self):
+        reply = '{"business": "A shop.", "why": "It was fine."}'
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm._call_gemini", return_value=reply):
+            body = client.get("/api/v1/narration/check").json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["answered_model"], body["requested_model"])
+        self.assertEqual(body["sample"], "A shop.")
+        self.assertIsNone(body["error"])
+
+    def test_the_check_surfaces_the_failure_instead_of_hiding_it(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
+             mock.patch("mri.llm._call_gemini", side_effect=TimeoutError("too slow")):
+            body = client.get("/api/v1/narration/check").json()
+        self.assertTrue(body["enabled"])
+        self.assertFalse(body["ok"])
+        self.assertIn("TimeoutError", body["error"])
+
+
 class TestEvaluateEndpoints(unittest.TestCase):
     def test_get_returns_the_full_structured_decision(self):
         with _Patched():

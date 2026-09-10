@@ -247,7 +247,57 @@ def policy():
             "model_rewrite_enabled": _narration["enabled"],
             "provider": _narration["provider"],
             "model": _narration["model"],
+            "fallback_models": _narration.get("fallbacks", []),
         },
+    }
+
+
+@app.get("/api/v1/narration/check")
+def narration_check():
+    """
+    Is the model layer actually working right now?
+
+    A rewrite that is configured but failing looks, from the finished page,
+    almost exactly like one that was never switched on: both show the engine's
+    own prose. This makes one real call with a throwaway summary and reports
+    what happened — which model answered, or the error that stopped it. It
+    touches no merchant, writes no audit row and cannot alter a decision.
+    """
+    config = llm.configured()
+    if not config["enabled"]:
+        return {
+            "enabled": False,
+            "ok": False,
+            "detail": "No key is set. GEMINI_API_KEY (Google AI Studio, free tier) "
+                      "turns the rewrite on; without it the engine's own wording ships.",
+        }
+
+    probe_summary = {
+        "business": {
+            "name": "Example Ltd",
+            "title": "Example Ltd",
+            "self_description": "A shop that sells one thing.",
+            "paragraph": "Example Ltd sells a single product from its own website.",
+        },
+        "why": {
+            "verdict": "Approved.", "decisive": [], "helped": ["The domain is old."],
+            "hurt": [], "next_step": "Board the merchant.",
+            "paragraphs": ["The score was comfortable and nothing overruled it."],
+        },
+    }
+    probe_result = {"domain": "example.com", "decision": "auto_approve", "score": 80,
+                    "reserve_pct": 0, "reserve_hold_days": 0, "payout": "T+2",
+                    "confidence_pct": 100}
+    out = llm.narrate(probe_summary, probe_result)
+    wrote = out.get("model")
+    return {
+        "enabled": True,
+        "ok": bool(wrote),
+        "provider": config["provider"],
+        "requested_model": config["model"],
+        "answered_model": wrote["model"] if wrote else None,
+        "error": out.get("model_error"),
+        "sample": wrote["business"] if wrote else None,
     }
 
 

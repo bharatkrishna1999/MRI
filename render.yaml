@@ -11,10 +11,14 @@ services:
       # is unreachable the reputation signal drops out of the denominator.
       - key: SAFE_BROWSING_API_KEY
         sync: false
-      # Optional. Google AI Studio key, free tier. With one set, the two
-      # plain-English summaries are rewritten by gemini-2.5-flash after the
-      # decision is final; without one the engine's own wording ships. Set the
-      # value in the Render dashboard — sync: false keeps it out of this file.
+      # Optional, and the one variable worth setting: with a key here the two
+      # plain-English summaries are rewritten by gemini-2.5-flash-lite after the
+      # decision is final, and without one the engine's own wording ships. The
+      # lite model is the free tier's workhorse since the December 2025 quota
+      # cuts; if it is unavailable the app falls back through the other free
+      # models on its own. A key is free at aistudio.google.com/apikey and needs
+      # no billing account. Set the value in the Render dashboard — sync: false
+      # keeps it out of this file. Confirm it is live at /api/v1/narration/check.
       - key: GEMINI_API_KEY
         sync: false
       - key: MRI_PUBLIC_URL
