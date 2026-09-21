@@ -10,6 +10,14 @@ evidence that actually arrived, and confidence carries the fraction of policy
 weight that could be computed. Nothing ever falls back to zero, because a zero
 is indistinguishable from a real failing signal and would produce a false
 decline out of an upstream outage.
+
+The weighted average is not the last word. Once every signal is computed and
+`decide` has read the band table, the score sheet goes to the model adjudicator,
+which sets the band it can defend against the evidence — usually the same one.
+See `adjudicator.py` for what it is allowed to change and what it is not. It is
+off without an API key, it runs after the 8 second evidence budget is spent
+rather than inside it, and every way it can fail ends with the arithmetic's own
+band shipping.
 """
 from __future__ import annotations
 
@@ -17,6 +25,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 
+from . import adjudicator
 from . import geo as geoip
 from .crawl import crawl_site
 from .domains import InvalidDomain, normalize_domain
@@ -270,8 +279,31 @@ def _by_category(signals: list[Signal]) -> list[dict]:
     return out
 
 
+def _adjudication_detail(adjudication: dict) -> str:
+    """One line for the console, saying what the call cost and what it changed."""
+    usage = adjudication.get("usage") or {}
+    cost = (f" · {usage['total_tokens']} tokens" if usage.get("total_tokens") else "")
+    timing = (f" · {adjudication['elapsed_ms']} ms" if adjudication.get("elapsed_ms") else "")
+    status = adjudication["status"]
+    if status == "unavailable":
+        return f"{adjudication.get('error')} — the engine's own band ships{timing}"
+    model = adjudication.get("model") or "model"
+    if status == "advisory":
+        return (f"{model} would have set {adjudication['model_band']}; advisory mode, "
+                f"so the engine's {adjudication['engine_band']} ships{cost}{timing}")
+    if status == "agreed":
+        return f"{model} agrees with {adjudication['final_band']}{cost}{timing}"
+    if status == "capped":
+        return (f"{model} set {adjudication['model_band']}, held at "
+                f"{adjudication['final_band']} by "
+                f"{', '.join(adjudication['capped_by'])}{cost}{timing}")
+    return (f"{model} set {adjudication['final_band']}, not the engine's "
+            f"{adjudication['engine_band']}{cost}{timing}")
+
+
 def evaluate(domain_input: str, declared: Declared | None = None,
-             timeout: float = GLOBAL_TIMEOUT_S, trace: Trace | None = None) -> dict:
+             timeout: float = GLOBAL_TIMEOUT_S, trace: Trace | None = None,
+             adjudicate: bool = True) -> dict:
     """
     Run the full policy against one domain and return a complete decision.
 
@@ -281,8 +313,13 @@ def evaluate(domain_input: str, declared: Declared | None = None,
     Pass a `trace` to watch it happen; one is created either way and the events
     are returned under `trace`, so a decision read back out of the audit table
     still carries the calls that produced it.
+
+    `adjudicate=False` skips the model reviewer and ships the arithmetic's own
+    band. The benchmark passes it, because a benchmark of the policy that had a
+    model in the middle of it would be measuring two things at once — and on a
+    free tier, sixty domains is sixty calls.
     """
-    from .decision import decide
+    from .decision import apply_verdict, decide
 
     started = time.monotonic()
     declared = declared or Declared()
@@ -411,6 +448,30 @@ def evaluate(domain_input: str, declared: Declared | None = None,
         "weights_total": TOTAL_WEIGHT,
         "signal_count": len(SIGNAL_SPEC),
     }
+
+    # The model reviewer. It reads the finished score sheet and sets the band,
+    # which is why it runs here: after every signal is computed and the
+    # arithmetic has had its say, and before the prose, so the summary describes
+    # the outcome that actually ships. Off without a key, and any failure leaves
+    # the deterministic decision exactly where it is.
+    result["decided_by"] = "engine"
+    if adjudicate and adjudicator.enabled():
+        with trace.step("adjudicate", "Model adjudication",
+                        "the full score sheet, one call, the model sets the band") as step:
+            adjudication = adjudicator.review(result)
+            step["status"] = {"agreed": "ok", "advisory": "ok"}.get(
+                adjudication["status"], "warn")
+            step["detail"] = _adjudication_detail(adjudication)
+        result["adjudication"] = adjudication
+        if adjudication["status"] in ("overruled", "capped"):
+            apply_verdict(result, adjudication, signals)
+        # `decided_by` names whoever actually determined the outcome. A capped
+        # verdict that the caps put straight back where the policy had it was
+        # decided by the policy, whatever the model said on the way.
+        if adjudication["status"] in ("agreed", "overruled") or (
+                adjudication["status"] == "capped"
+                and adjudication["final_band"] != adjudication["engine_band"]):
+            result["decided_by"] = f"{adjudication['provider']}:{adjudication['model']}"
 
     # Prose last, and strictly downstream of the verdict: it reads the finished
     # decision and cannot reach back into it.

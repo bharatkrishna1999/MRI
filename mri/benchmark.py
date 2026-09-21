@@ -103,7 +103,11 @@ def evaluate_all(rows: list[dict] | None = None, workers: int = 6,
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # narrate=False: the benchmark reads scores, not prose, and sixty model
         # calls for paragraphs nobody opens is a free tier spent on nothing.
-        futures = {pool.submit(run, row["domain"], narrate=False): row for row in rows}
+        # adjudicate=False for a harder reason: this run is the measurement of
+        # the deterministic policy itself, and a model sitting between the score
+        # and the band would make it a measurement of both at once.
+        futures = {pool.submit(run, row["domain"], narrate=False, adjudicate=False): row
+                   for row in rows}
         for future in as_completed(futures):
             row = futures[future]
             record = {

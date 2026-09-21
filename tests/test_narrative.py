@@ -337,7 +337,7 @@ class TestGeminiRequestShape(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}, clear=True), \
              mock.patch("mri.llm.httpx.post", side_effect=fake_post):
             try:
-                captured["text"] = llm._call_gemini("prompt")
+                captured["text"] = llm.complete(llm.SYSTEM, "prompt")
             except Exception as exc:  # noqa: BLE001 — the assertion is on the message
                 captured["error"] = f"{type(exc).__name__}: {exc}"
         return captured

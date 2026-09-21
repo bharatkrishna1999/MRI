@@ -350,6 +350,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 max(40px,env(safe-area-in
         <div class="dom" id="v_domain"></div>
         <h2 id="v_decision"></h2>
         <div id="v_capped" style="font-size:13px;opacity:.9;margin-top:4px"></div>
+        <div id="v_adjudged" style="font-size:13px;opacity:.9;margin-top:4px"></div>
       </div>
       <div class="scorebox"><b id="v_score">—</b><span>score / 100</span></div>
     </div>
@@ -470,15 +471,22 @@ fetch("/api/v1/taxonomy").then(r=>r.json()).then(d=>{
 
 fetch("/api/v1/policy").then(r=>r.json()).then(p=>{
   $("policyChip").textContent = p.policy_version;
-  renderAiChip(p.narration);
+  renderAiChip(p.narration, p.adjudication);
   $("footpolicy").innerHTML = `Policy <b>${p.policy_version}</b> (effective ${p.effective}) · `
     + `${p.signals.length} signals across ${Object.keys(p.category_weights).length} categories · 100 weight points · `
     + `${p.global_timeout_s}s global budget, ${p.per_call_timeout_s}s per call · decisions cached 24h and persisted to SQLite.`
     + (p.geoip.available ? ` GeoLite2 built ${p.geoip.built}, read locally.` : "")
     + (p.narration.model_rewrite_enabled
         ? ` Both summaries are written by the engine and then rewritten by ${esc(p.narration.model)} `
-          + `(${esc(p.narration.provider)}), after the decision is final.`
-        : ` Both summaries are written by the engine; no model rewrite is configured.`);
+          + `(${esc(p.narration.provider)}), after the outcome is final.`
+        : ` Both summaries are written by the engine; no model rewrite is configured.`)
+    + ((p.adjudication||{}).mode === "binding"
+        ? ` The band is set by ${esc(p.adjudication.model)} from the engine's own score sheet; `
+          + `${Object.keys(p.adjudication.caps).length} findings cap what it may approve, and any `
+          + `failure ships the policy's own band.`
+        : (p.adjudication||{}).mode === "advisory"
+          ? ` A model reviews every band and its verdict is recorded, but the policy's band ships.`
+          : ` The band is set by the policy's arithmetic alone.`);
 });
 
 // ── Is the model layer actually live? ────────────────────────────────────
@@ -486,15 +494,29 @@ fetch("/api/v1/policy").then(r=>r.json()).then(p=>{
 // the chip says which before a run, and one click makes the server prove it
 // with a real call against a throwaway summary.
 let NARRATION = null;
+let ADJUDICATION = null;
 
-function renderAiChip(n){
+function renderAiChip(n, a){
   NARRATION = n || {};
+  ADJUDICATION = a || {};
   const chip = $("aiChip");
-  if(NARRATION.model_rewrite_enabled){
+  if(ADJUDICATION.mode === "binding" && ADJUDICATION.enabled){
+    // The chip has to lead with the bigger claim. A model that writes the
+    // paragraphs and a model that sets the band are different risks to a
+    // reader, and the one that moves money goes first.
+    chip.className = "chip-policy chip-ai";
+    chip.textContent = "AI decides · " + ADJUDICATION.model;
+    chip.title = `${ADJUDICATION.model} reads the engine's score sheet and sets the band. `
+      + `It may always be more cautious than the score; it may only be more generous `
+      + `up to the policy's caps. Click to make a live test call.`;
+  } else if(NARRATION.model_rewrite_enabled){
     chip.className = "chip-policy chip-ai";
     chip.textContent = "AI " + NARRATION.model;
     chip.title = `The two plain-English summaries are rewritten by ${NARRATION.model} `
-      + `after the decision is final. Click to make a live test call.`;
+      + (ADJUDICATION.mode === "advisory"
+          ? `, and it reviews every band without deciding one. `
+          : ` after the outcome is final. `)
+      + `Click to make a live test call.`;
   } else {
     chip.className = "chip-policy chip-ai off";
     chip.textContent = "AI off";
@@ -543,7 +565,7 @@ $("form").addEventListener("submit", e=>{ e.preventDefault(); go($("domain").val
 // Long-running work arrives twice: once as `running`, once with `ref` pointing
 // back at it. The second replaces the first in place, so the log reads like a
 // terminal rather than doubling every line.
-const PHASES = ["input","cache","enrich","crawl","infer","signals","score","decide","narrate","persist"];
+const PHASES = ["input","cache","enrich","crawl","infer","signals","score","decide","adjudicate","narrate","persist"];
 const CONSOLE = {lines:new Map(), count:0, autoscroll:true, timer:null, started:0, seen:new Set()};
 
 function consoleReset(domain){
@@ -770,6 +792,7 @@ function render(m){
   $("v_capped").textContent = (m.overrides_applied||[]).length
     ? `Score alone bought "${bandName(m.scored_band)}" — capped by ${m.overrides_applied.map(o=>o.code).join(", ")}`
     : "";
+  $("v_adjudged").innerHTML = adjudgedLine(m);
   $("v_rationale").textContent = m.rationale;
   renderPlain(m);
 
@@ -905,9 +928,16 @@ function renderPlain(m){
     wh += `<div class="grouphead">What happens next</div><p>${esc(w.next_step)}</p>`;
   }
   $("v_why").innerHTML = wh;
+  // The rewrite and the verdict are separate jobs and the byline says so: a
+  // model rewording a decision and a model setting one are not the same claim.
+  const adj = m.adjudication;
+  const decided = adj && ["agreed","overruled","capped"].includes(adj.status)
+    ? ` The band itself was set by <b>${esc(adj.model||"the model")}</b> from the score sheet, `
+      + `within the caps the policy does not let it lift.`
+    : ` No model set the band; the policy's own arithmetic did.`;
   $("v_why_by").innerHTML = model
-    ? `Rewritten by <b>${esc(model.model)}</b> after the decision was final. A model never scores, overrides or reviews a decision here — it only rewords one.`
-    : `Written by the engine from the signals below. No model was involved.` + failed;
+    ? `Rewritten by <b>${esc(model.model)}</b> from the engine's own wording, after the outcome was final.` + decided
+    : `Written by the engine from the signals below.` + decided + failed;
 }
 
 // T1: the Advanced panel comes back prefilled from what enrichment found.
@@ -928,6 +958,26 @@ function prefillAdvanced(m){
 function toggle(i,row){ row.classList.toggle("open");
   document.querySelectorAll(".g"+i).forEach(r=>r.classList.toggle("show")); }
 function col(n){ return n===null?"#cbd2dd":n>=70?"var(--good)":n>=40?"var(--warn)":"var(--bad)"; }
+// Who set the band that is on screen. Four states worth telling apart: the
+// model agreed, the model moved it, the model was held by a cap it may not
+// lift, and the model was asked but is not allowed to decide (advisory).
+function adjudgedLine(m){
+  const a = m.adjudication;
+  if(!a) return "";
+  const who = esc(a.model || "the model");
+  if(a.status === "unavailable")
+    return `Model review did not complete (${esc(a.error||"no reason given")}) — the policy's own band stands.`;
+  if(a.status === "advisory")
+    return `Advisory: ${who} would have set “${bandName(a.model_band)}”. The policy's band ships.`;
+  if(a.status === "capped")
+    return `${who} set “${bandName(a.model_band)}” — held at “${bandName(a.final_band)}” by `
+         + esc((a.capped_by||[]).join(", ")) + `, which no model verdict may lift.`;
+  if(a.status === "overruled")
+    return `Set by ${who}, not by the score. The policy's arithmetic bought `
+         + `“${bandName(a.engine_band)}”. <span style="opacity:.85">${esc(a.reason||"")}</span>`;
+  return `${who} reviewed the score sheet and agrees with this band.`;
+}
+
 function bandName(b){ return ({auto_approve:"Auto approve",approve_with_reserve:"Approve with reserve",
   manual_review:"Manual review",decline:"Decline"})[b]||b; }
 function severity(code){
