@@ -50,7 +50,7 @@ _warm_lock = threading.Lock()
 
 def run(domain_input: str, declared: Declared | None = None,
         use_cache: bool = True, timeout: float = GLOBAL_TIMEOUT_S,
-        sink=None, narrate: bool = True) -> dict:
+        sink=None, narrate: bool = True, adjudicate: bool = True) -> dict:
     """
     Evaluate a domain, preferring a cached decision under 24 hours old.
 
@@ -67,6 +67,11 @@ def run(domain_input: str, declared: Declared | None = None,
     reads, and on a free tier that is the whole day's quota. The engine's own
     summaries are written either way — they are part of the decision, not an
     extra.
+
+    `adjudicate=False` does the same for the model reviewer that sets the band.
+    The benchmark passes it too, for the same two reasons and one more: a
+    benchmark is how we find out whether the deterministic policy is any good,
+    and it cannot answer that with a model in the middle of it.
     """
     from .domains import normalize_domain
 
@@ -95,7 +100,8 @@ def run(domain_input: str, declared: Declared | None = None,
                     "declared context supplied" if not declared.is_empty()
                     else "live run requested — every call will be made again")
 
-    result = evaluate(domain_input, declared, timeout=timeout, trace=trace)
+    result = evaluate(domain_input, declared, timeout=timeout, trace=trace,
+                      adjudicate=adjudicate)
     result["cached"] = False
 
     # Optional, off unless a key is set, and deliberately here rather than in

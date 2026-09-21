@@ -5,6 +5,10 @@ A number out of 100 is not a decision. Reserve percentage and payout delay are
 the levers a merchant of record actually pulls, so those are what this module
 returns. The score exists only to select a row in the policy's band table, and
 reason codes can override the row the score would have bought.
+
+`decide` is the arithmetic's answer and is always computed. `apply_verdict` is
+what rewrites it when the model adjudicator sets a different band; see
+`adjudicator.py` for what that model may and may not do.
 """
 from __future__ import annotations
 
@@ -69,6 +73,73 @@ def decide(scoring: dict, codes: list[str], signals: list) -> dict:
         "terms_line": _terms_line(band),
         "policy_version": POLICY_VERSION,
     }
+
+
+def apply_verdict(result: dict, adjudication: dict, signals: list) -> dict:
+    """
+    Rewrite a finished decision to the band the model set.
+
+    Everything downstream of the band is rebuilt, because a decision that says
+    "manual review" over a terms line reading "0% reserve, payout T+7" is worse
+    than no decision at all. Everything upstream of it — the score, the
+    confidence, the reason codes, the band the score bought — is left exactly as
+    the engine computed it. That is the record; this is the outcome.
+
+    Returns the same dict, mutated, so the caller reads one thing.
+    """
+    final = adjudication.get("final_band")
+    if not final or final == result.get("band"):
+        return result
+
+    band = band_by_id(final)
+    codes = [c["code"] for c in (result.get("reason_codes") or [])]
+
+    result.update({
+        "decision": band["decision"],
+        "band": band["id"],
+        "reserve_pct": band["reserve_pct"],
+        "reserve_hold_days": band["reserve_hold_days"],
+        "payout": band["payout"],
+        "onboarding": band["onboarding"],
+        "documents_required": band["documents"],
+        "terms_line": _terms_line(band),
+        "headline": f"{band['decision']} — set by the model reviewer",
+        "action_items": _action_items(band, codes, signals),
+        "engine_band": adjudication.get("engine_band"),
+        "rationale": _verdict_rationale(result, band, adjudication),
+    })
+    return result
+
+
+def _verdict_rationale(result: dict, band: dict, adjudication: dict) -> str:
+    """
+    Both answers in one paragraph, in the order a reviewer needs them: what the
+    arithmetic said, what the model said instead, and why.
+    """
+    engine_band = band_by_id(adjudication.get("engine_band") or "decline")
+    score = result.get("score")
+    parts = []
+    if score is not None:
+        parts.append(
+            f"The policy scored {score} out of 100 on "
+            f"{result.get('computed_weight')} of 100 weight points, which its bands read as "
+            f"{engine_band['decision'].lower()}.")
+    else:
+        parts.append("Nothing in the policy could be scored, which its bands read as "
+                     f"{engine_band['decision'].lower()}.")
+
+    model = adjudication.get("model") or "the model reviewer"
+    reason = (adjudication.get("reason") or "").strip().rstrip(".")
+    parts.append(f"{model} reviewed the same evidence and set {band['decision'].lower()}"
+                 + (f": {reason}." if reason else "."))
+
+    if adjudication.get("capped_by"):
+        parts.append(
+            "That verdict was then held to this band by "
+            + ", ".join(adjudication["capped_by"])
+            + ", which is a finding no model verdict is allowed to lift.")
+
+    return " ".join(parts)
 
 
 def _cap_label(code: str) -> str:

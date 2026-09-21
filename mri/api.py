@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import adjudicator
 from . import benchmark as bench
 from . import geo, llm, store
 from .domains import InvalidDomain
@@ -249,6 +250,16 @@ def policy():
             "model": _narration["model"],
             "fallback_models": _narration.get("fallbacks", []),
         },
+        # Who sets the band. The engine always computes one; in binding mode a
+        # model reads the same score sheet and sets the one that ships.
+        "adjudication": {
+            "mode": adjudicator.mode(),
+            "enabled": adjudicator.enabled(),
+            "provider": _narration["provider"],
+            "model": _narration["model"],
+            "caps": adjudicator.MODEL_CAPS,
+            "max_output_tokens": adjudicator.MAX_OUTPUT_TOKENS,
+        },
     }
 
 
@@ -298,6 +309,69 @@ def narration_check():
         "answered_model": wrote["model"] if wrote else None,
         "error": out.get("model_error"),
         "sample": wrote["business"] if wrote else None,
+    }
+
+
+@app.get("/api/v1/adjudicator/check")
+def adjudicator_check(domain: str = Query("example.com", description="Domain to dry-run")):
+    """
+    What the model would do with a score sheet, without touching a merchant.
+
+    Builds the digest that a real run would send, makes one call, and reports
+    the band that came back, what the call cost in tokens and which caps would
+    have applied. Nothing is evaluated, nothing is crawled and no audit row is
+    written; the score sheet below is a fixture.
+    """
+    if not adjudicator.enabled():
+        return {
+            "enabled": False,
+            "mode": adjudicator.mode(),
+            "detail": "No key is set, or MRI_ADJUDICATOR=off. Without one the "
+                      "engine's own band ships on every decision.",
+        }
+
+    probe = {
+        "domain": domain,
+        "score": 58.0,
+        "confidence_pct": 82,
+        "computed_weight": 82,
+        "band": "manual_review",
+        "scored_band": "manual_review",
+        "overrides_applied": [],
+        "reason_codes": [{"code": "NO_REFUND_POLICY", "description": ""}],
+        "declared": {},
+        "signals": [
+            {"key": "domain_age", "raw": "2,190 days", "normalized": 100,
+             "weight": 8, "status": "ok"},
+            {"key": "refund_policy", "raw": "not found", "normalized": 0,
+             "weight": 8, "status": "ok"},
+            {"key": "content_depth", "raw": "1,840 words", "normalized": 100,
+             "weight": 8, "status": "ok"},
+            {"key": "processor", "raw": "Stripe", "normalized": 100,
+             "weight": 7, "status": "ok"},
+        ],
+        "evidence": {"crawl": {"root_status": 200, "word_count": 1840, "title": "Example Ltd",
+                               "description": "A shop that sells one thing.",
+                               "links_fetched": 9, "links_discovered": 12,
+                               "pages": {"terms": {}, "privacy": {}, "contact": {}}}},
+    }
+    record = adjudicator.review(probe)
+    return {
+        "enabled": True,
+        "ok": record["status"] != "unavailable",
+        "mode": record["mode"],
+        "model": record["model"],
+        "verdict": record["model_band"],
+        "engine_band": record["engine_band"],
+        "final_band": record["final_band"],
+        "status": record["status"],
+        "reason": record["reason"],
+        "fault": record["fault"],
+        "confidence": record["confidence"],
+        "usage": record["usage"],
+        "elapsed_ms": record["elapsed_ms"],
+        "error": record["error"],
+        "digest_sent": adjudicator._digest(probe),
     }
 
 
